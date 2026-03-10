@@ -1,0 +1,49 @@
+{
+  "name": "twitter-trend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first pipeline for capturing X timeline media and indexing usage semantics.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "crawl:timeline": "tsx src/cli/crawl-timeline.ts",
+    "crawl:openclaw": "tsx src/cli/crawl-openclaw.ts",
+    "capture:openclaw-current": "tsx src/cli/capture-openclaw-current.ts",
+    "media:rebuild": "tsx src/cli/rebuild-media-assets.ts",
+    "analyze:tweet": "tsx src/cli/analyze-tweet.ts",
+    "analyze:missing": "tsx src/cli/analyze-missing.ts",
+    "search:facets": "tsx src/cli/search-facets.ts",
+    "scheduler": "tsx src/cli/scheduler.ts",
+    "stack": "tsx src/cli/run-stack.ts",
+    "test": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "check": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@google/genai": "^1.44.0",
+    "@types/ws": "^8.18.1",
+    "cheerio": "^1.1.2",
+    "chromadb": "^3.3.1",
+    "dotenv": "^17.3.1",
+    "next": "^16.1.6",
+    "playwright": "^1.52.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "sharp": "^0.34.5",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.1.6",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

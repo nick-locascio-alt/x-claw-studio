@@ -1,0 +1,664 @@
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { ensureDir, writeJson } from "@/src/lib/fs";
+import { buildUsageId } from "@/src/lib/usage-id";
+import type {
+  CrawlManifest,
+  ExtractedTweet,
+  MediaAssetPhashMatch,
+  MediaAssetRecord,
+  MediaAssetSummary,
+  MediaAssetView,
+  TweetMedia,
+  TweetUsageRecord,
+  UsageAnalysis
+} from "@/src/lib/types";
+import { hammingDistanceHex, computeDifferenceHash } from "@/src/server/media-fingerprint";
+import { readAllUsageAnalyses } from "@/src/server/analysis-store";
+
+const projectRoot = process.cwd();
+const assetDir = path.join(projectRoot, "data", "analysis", "media-assets");
+const assetIndexPath = path.join(assetDir, "index.json");
+const assetSummaryPath = path.join(assetDir, "summaries.json");
+const assetStarsPath = path.join(assetDir, "stars.json");
+
+interface MediaAssetIndexFile {
+  generatedAt: string;
+  assets: MediaAssetRecord[];
+  usageToAssetId: Record<string, string>;
+}
+
+interface MediaAssetSummaryFile {
+  generatedAt: string;
+  summaries: MediaAssetSummary[];
+}
+
+interface MediaAssetStarsFile {
+  updatedAt: string;
+  starredAssetIds: string[];
+}
+
+interface MediaCandidate {
+  usageId: string;
+  tweet: ExtractedTweet;
+  mediaIndex: number;
+  media: TweetMedia;
+  filePath: string | null;
+}
+
+const EXACT_ASSET_MATCH_DISTANCE = 2;
+const DEFAULT_PHASH_MATCH_DISTANCE = 4;
+
+function readJsonFile<T>(filePath: string): T | null {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+}
+
+function normalizeMediaUrl(media: TweetMedia): string | null {
+  return media.posterUrl ?? media.previewUrl ?? media.sourceUrl ?? null;
+}
+
+function readStarredAssetIds(): Set<string> {
+  const file = readJsonFile<MediaAssetStarsFile>(assetStarsPath);
+  return new Set(file?.starredAssetIds ?? []);
+}
+
+function writeStarredAssetIds(assetIds: Iterable<string>): void {
+  ensureDir(assetDir);
+  writeJson(assetStarsPath, {
+    updatedAt: new Date().toISOString(),
+    starredAssetIds: Array.from(new Set(assetIds)).sort()
+  });
+}
+
+function hydrateAssetsWithStars(assets: MediaAssetRecord[]): MediaAssetRecord[] {
+  const starredAssetIds = readStarredAssetIds();
+  return assets.map((asset) => ({
+    ...asset,
+    starred: starredAssetIds.has(asset.assetId)
+  }));
+}
+
+function extractMediaRequestKey(url: string | null | undefined): string | null {
+  if (!url) {
+    return null;
+  }
+
+  const patterns = [
+    /(?:amplify_video_thumb|amplify_video)\/(\d+)/,
+    /(?:ext_tw_video_thumb|ext_tw_video)\/(\d+)/
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+function buildFallbackAssetId(candidate: MediaCandidate): string {
+  const seed = [
+    candidate.media.mediaKind,
+    candidate.media.sourceUrl ?? "",
+    candidate.media.previewUrl ?? "",
+    candidate.media.posterUrl ?? "",
+    candidate.filePath ?? "",
+    candidate.usageId
+  ].join("|");
+
+  return `asset-${createHash("sha1").update(seed).digest("hex").slice(0, 16)}`;
+}
+
+function createUsageAnalysisFallback(candidate: MediaCandidate): UsageAnalysis {
+  return {
+    usageId: candidate.usageId,
+    tweetId: candidate.tweet.tweetId,
+    mediaIndex: candidate.mediaIndex,
+    mediaKind: candidate.media.mediaKind,
+    status: "pending",
+    has_celebrity: null,
+    has_human_face: null,
+    features_female: null,
+    features_male: null,
+    has_screenshot_ui: null,
+    has_text_overlay: null,
+    has_chart_or_graph: null,
+    has_logo_or_watermark: null,
+    caption_brief: null,
+    scene_description: null,
+    ocr_text: null,
+    primary_subjects: [],
+    secondary_subjects: [],
+    visible_objects: [],
+    setting_context: null,
+    action_or_event: null,
+    primary_emotion: null,
+    emotional_tone: null,
+    conveys: null,
+    user_intent: null,
+    rhetorical_role: null,
+    text_media_relationship: null,
+    metaphor: null,
+    humor_mechanism: null,
+    cultural_reference: null,
+    meme_format: null,
+    persuasion_strategy: null,
+    brand_signals: [],
+    trend_signal: null,
+    reuse_pattern: null,
+    why_it_works: null,
+    audience_takeaway: null,
+    search_keywords: [],
+    confidence_notes: null,
+    usage_notes: null
+  };
+}
+
+function mergeAnalysisValues(values: Array<string | null | undefined>): string | null {
+  const unique = Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean)));
+  if (unique.length === 0) {
+    return null;
+  }
+
+  return unique.join(" | ");
+}
+
+function mergeAnalysisArrays(values: string[][]): string[] {
+  return Array.from(new Set(values.flat().map((value) => value.trim()).filter(Boolean)));
+}
+
+export function summarizeAnalyses(assetId: string, analyses: UsageAnalysis[]): MediaAssetSummary {
+  const completeAnalyses = analyses.filter((analysis) => analysis.status === "complete");
+  const source = completeAnalyses[0] ?? analyses[0] ?? null;
+  const now = new Date().toISOString();
+
+  if (!source) {
+    return {
+      assetId,
+      status: "fallback_first_analysis",
+      sourceUsageId: null,
+      usageCount: 0,
+      completeAnalysisCount: 0,
+      summary: null,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  if (completeAnalyses.length <= 1) {
+    return {
+      assetId,
+      status: "fallback_first_analysis",
+      sourceUsageId: source.usageId,
+      usageCount: analyses.length,
+      completeAnalysisCount: completeAnalyses.length,
+      summary: source,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  const summary: UsageAnalysis = {
+    ...source,
+    usageId: `${assetId}::summary`,
+    tweetId: null,
+    mediaIndex: 0,
+    status: "complete",
+    has_celebrity: completeAnalyses.some((analysis) => analysis.has_celebrity === true),
+    has_human_face: completeAnalyses.some((analysis) => analysis.has_human_face === true),
+    features_female: completeAnalyses.some((analysis) => analysis.features_female === true),
+    features_male: completeAnalyses.some((analysis) => analysis.features_male === true),
+    has_screenshot_ui: completeAnalyses.some((analysis) => analysis.has_screenshot_ui === true),
+    has_text_overlay: completeAnalyses.some((analysis) => analysis.has_text_overlay === true),
+    has_chart_or_graph: completeAnalyses.some((analysis) => analysis.has_chart_or_graph === true),
+    has_logo_or_watermark: completeAnalyses.some((analysis) => analysis.has_logo_or_watermark === true),
+    caption_brief: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.caption_brief)),
+    scene_description: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.scene_description)),
+    ocr_text: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.ocr_text)),
+    primary_subjects: mergeAnalysisArrays(completeAnalyses.map((analysis) => analysis.primary_subjects)),
+    secondary_subjects: mergeAnalysisArrays(completeAnalyses.map((analysis) => analysis.secondary_subjects)),
+    visible_objects: mergeAnalysisArrays(completeAnalyses.map((analysis) => analysis.visible_objects)),
+    setting_context: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.setting_context)),
+    action_or_event: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.action_or_event)),
+    primary_emotion: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.primary_emotion)),
+    emotional_tone: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.emotional_tone)),
+    conveys: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.conveys)),
+    user_intent: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.user_intent)),
+    rhetorical_role: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.rhetorical_role)),
+    text_media_relationship: mergeAnalysisValues(
+      completeAnalyses.map((analysis) => analysis.text_media_relationship)
+    ),
+    metaphor: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.metaphor)),
+    humor_mechanism: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.humor_mechanism)),
+    cultural_reference: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.cultural_reference)),
+    meme_format: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.meme_format)),
+    persuasion_strategy: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.persuasion_strategy)),
+    brand_signals: mergeAnalysisArrays(completeAnalyses.map((analysis) => analysis.brand_signals)),
+    trend_signal: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.trend_signal)),
+    reuse_pattern: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.reuse_pattern)),
+    why_it_works: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.why_it_works)),
+    audience_takeaway: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.audience_takeaway)),
+    search_keywords: mergeAnalysisArrays(completeAnalyses.map((analysis) => analysis.search_keywords)),
+    confidence_notes: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.confidence_notes)),
+    usage_notes: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.usage_notes))
+  };
+
+  return {
+    assetId,
+    status: "aggregated",
+    sourceUsageId: source.usageId,
+    usageCount: analyses.length,
+    completeAnalysisCount: completeAnalyses.length,
+    summary,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function findLocalMediaFile(media: TweetMedia, manifests: CrawlManifest[]): string | null {
+  const mediaUrl = normalizeMediaUrl(media);
+  if (!mediaUrl) {
+    return null;
+  }
+
+  for (const manifest of manifests) {
+    for (const intercepted of manifest.interceptedMedia) {
+      if (!intercepted.persisted || !intercepted.filePath) {
+        continue;
+      }
+
+      if (intercepted.url === mediaUrl) {
+        return path.join(projectRoot, intercepted.filePath);
+      }
+    }
+  }
+
+  return null;
+}
+
+function findRelatedSourceUrls(media: TweetMedia, manifests: CrawlManifest[]): string[] {
+  const directUrls = [media.sourceUrl, media.previewUrl, media.posterUrl].filter(
+    (value): value is string => Boolean(value)
+  );
+  const mediaRequestKey = extractMediaRequestKey(media.posterUrl ?? media.previewUrl ?? media.sourceUrl);
+
+  const related = new Set<string>(directUrls);
+  if (!mediaRequestKey) {
+    return Array.from(related);
+  }
+
+  for (const manifest of manifests) {
+    for (const intercepted of manifest.interceptedMedia) {
+      if (intercepted.mediaClass !== "video") {
+        continue;
+      }
+
+      if (extractMediaRequestKey(intercepted.url) === mediaRequestKey) {
+        related.add(intercepted.url);
+      }
+    }
+  }
+
+  return Array.from(related);
+}
+
+function buildMediaCandidates(usages: TweetUsageRecord[], manifests: CrawlManifest[]): MediaCandidate[] {
+  return usages.map((usage) => ({
+    usageId: usage.usageId,
+    tweet: usage.tweet,
+    mediaIndex: usage.mediaIndex,
+    media: usage.tweet.media[usage.mediaIndex],
+    filePath: findLocalMediaFile(usage.tweet.media[usage.mediaIndex], manifests)
+  }));
+}
+
+export async function buildMediaAssetIndex(input: {
+  usages: TweetUsageRecord[];
+  manifests: CrawlManifest[];
+}): Promise<MediaAssetIndexFile> {
+  const candidates = buildMediaCandidates(input.usages, input.manifests);
+  const assets: MediaAssetRecord[] = [];
+  const usageToAssetId: Record<string, string> = {};
+  const now = new Date().toISOString();
+  const starredAssetIds = readStarredAssetIds();
+
+  for (const candidate of candidates) {
+    const fingerprint = candidate.filePath ? await computeDifferenceHash(candidate.filePath) : null;
+    const matched = assets.find((asset) => {
+      if (!asset.fingerprint?.hex || !fingerprint?.hex) {
+        return false;
+      }
+
+      return hammingDistanceHex(asset.fingerprint.hex, fingerprint.hex) <= EXACT_ASSET_MATCH_DISTANCE;
+    });
+
+    if (matched) {
+      matched.updatedAt = now;
+      matched.usageIds.push(candidate.usageId);
+      for (const sourceUrl of findRelatedSourceUrls(candidate.media, input.manifests)) {
+        matched.sourceUrls.push(sourceUrl);
+      }
+      if (candidate.media.previewUrl) matched.previewUrls.push(candidate.media.previewUrl);
+      if (candidate.media.posterUrl) matched.posterUrls.push(candidate.media.posterUrl);
+      usageToAssetId[candidate.usageId] = matched.assetId;
+      continue;
+    }
+
+    const assetId = fingerprint?.hex
+      ? `asset-${fingerprint.hex}`
+      : buildFallbackAssetId(candidate);
+
+    const record: MediaAssetRecord = {
+      assetId,
+      canonicalMediaUrl: normalizeMediaUrl(candidate.media),
+      canonicalFilePath: candidate.filePath ? path.relative(projectRoot, candidate.filePath) : null,
+      mediaKind: candidate.media.mediaKind,
+      fingerprint,
+      starred: starredAssetIds.has(assetId),
+      usageIds: [candidate.usageId],
+      sourceUrls: findRelatedSourceUrls(candidate.media, input.manifests),
+      previewUrls: candidate.media.previewUrl ? [candidate.media.previewUrl] : [],
+      posterUrls: candidate.media.posterUrl ? [candidate.media.posterUrl] : [],
+      createdAt: now,
+      updatedAt: now
+    };
+
+    assets.push(record);
+    usageToAssetId[candidate.usageId] = assetId;
+  }
+
+  const dedupe = (values: string[]) => Array.from(new Set(values));
+  for (const asset of assets) {
+    asset.usageIds = dedupe(asset.usageIds);
+    asset.sourceUrls = dedupe(asset.sourceUrls);
+    asset.previewUrls = dedupe(asset.previewUrls);
+    asset.posterUrls = dedupe(asset.posterUrls);
+  }
+
+  const index: MediaAssetIndexFile = {
+    generatedAt: now,
+    assets: assets.sort((a, b) => a.assetId.localeCompare(b.assetId)),
+    usageToAssetId
+  };
+
+  ensureDir(assetDir);
+  writeJson(assetIndexPath, index);
+  return index;
+}
+
+export function buildMediaAssetSummaries(input: {
+  usages: TweetUsageRecord[];
+  assetIndex: MediaAssetIndexFile;
+}): MediaAssetSummaryFile {
+  const analysisMap = new Map(readAllUsageAnalyses().map((analysis) => [analysis.usageId, analysis]));
+  const usageFallbackMap = new Map(
+    input.usages.map((usage) => [usage.usageId, usage.analysis ?? createUsageAnalysisFallback({
+      usageId: usage.usageId,
+      tweet: usage.tweet,
+      mediaIndex: usage.mediaIndex,
+      media: usage.tweet.media[usage.mediaIndex],
+      filePath: null
+    })])
+  );
+  const summaries = input.assetIndex.assets.map((asset) =>
+    summarizeAnalyses(
+      asset.assetId,
+      asset.usageIds.map((usageId) => analysisMap.get(usageId) ?? usageFallbackMap.get(usageId)).filter(Boolean) as UsageAnalysis[]
+    )
+  );
+
+  const file: MediaAssetSummaryFile = {
+    generatedAt: new Date().toISOString(),
+    summaries
+  };
+
+  ensureDir(assetDir);
+  writeJson(assetSummaryPath, file);
+  return file;
+}
+
+export function readMediaAssetIndex(): MediaAssetIndexFile | null {
+  const file = readJsonFile<MediaAssetIndexFile>(assetIndexPath);
+  if (!file) {
+    return null;
+  }
+
+  return {
+    ...file,
+    assets: hydrateAssetsWithStars(file.assets)
+  };
+}
+
+export function readMediaAssetSummaries(): MediaAssetSummaryFile | null {
+  return readJsonFile<MediaAssetSummaryFile>(assetSummaryPath);
+}
+
+export function setMediaAssetStarred(assetId: string, starred: boolean): boolean {
+  const index = readMediaAssetIndex();
+  if (!index?.assets.some((asset) => asset.assetId === assetId)) {
+    return false;
+  }
+
+  const starredAssetIds = readStarredAssetIds();
+  if (starred) {
+    starredAssetIds.add(assetId);
+  } else {
+    starredAssetIds.delete(assetId);
+  }
+
+  writeStarredAssetIds(starredAssetIds);
+  return true;
+}
+
+export function buildPhashMatchMap(input: {
+  assets: MediaAssetRecord[];
+  usages: TweetUsageRecord[];
+  maxDistance?: number;
+}): Record<string, MediaAssetPhashMatch[]> {
+  const maxDistance = input.maxDistance ?? DEFAULT_PHASH_MATCH_DISTANCE;
+  const usageGroups = new Map<string, TweetUsageRecord[]>();
+
+  for (const usage of input.usages) {
+    if (!usage.mediaAssetId) {
+      continue;
+    }
+
+    const current = usageGroups.get(usage.mediaAssetId) ?? [];
+    current.push(usage);
+    usageGroups.set(usage.mediaAssetId, current);
+  }
+
+  const matchMap: Record<string, MediaAssetPhashMatch[]> = Object.fromEntries(
+    input.assets.map((asset) => [asset.assetId, []])
+  );
+
+  for (let index = 0; index < input.assets.length; index += 1) {
+    const left = input.assets[index];
+    if (!left.fingerprint?.hex) {
+      continue;
+    }
+
+    for (let compareIndex = index + 1; compareIndex < input.assets.length; compareIndex += 1) {
+      const right = input.assets[compareIndex];
+      if (!right.fingerprint?.hex) {
+        continue;
+      }
+
+      const distance = hammingDistanceHex(left.fingerprint.hex, right.fingerprint.hex);
+      if (distance > maxDistance) {
+        continue;
+      }
+
+      matchMap[left.assetId].push({
+        asset: right,
+        distance,
+        usages: usageGroups.get(right.assetId) ?? []
+      });
+      matchMap[right.assetId].push({
+        asset: left,
+        distance,
+        usages: usageGroups.get(left.assetId) ?? []
+      });
+    }
+  }
+
+  for (const assetId of Object.keys(matchMap)) {
+    matchMap[assetId].sort((left, right) => {
+      if (left.distance !== right.distance) {
+        return left.distance - right.distance;
+      }
+
+      return right.usages.length - left.usages.length;
+    });
+  }
+
+  return matchMap;
+}
+
+export function getMediaAssetView(input: {
+  usageId: string;
+  usages: TweetUsageRecord[];
+}): MediaAssetView | null {
+  const index = readMediaAssetIndex();
+  if (!index) {
+    return null;
+  }
+
+  const assetId = index.usageToAssetId[input.usageId];
+  if (!assetId) {
+    return null;
+  }
+
+  const asset = index.assets.find((item) => item.assetId === assetId);
+  if (!asset) {
+    return null;
+  }
+
+  const summaries = readMediaAssetSummaries();
+  const phashMatchMap = buildPhashMatchMap({
+    assets: index.assets,
+    usages: input.usages
+  });
+
+  return {
+    asset,
+    summary: summaries?.summaries.find((item) => item.assetId === assetId) ?? null,
+    duplicateUsages: input.usages.filter((usage) => asset.usageIds.includes(usage.usageId)),
+    phashMatches: phashMatchMap[assetId] ?? []
+  };
+}
+
+export function getPhashMatchClusters(input: { usages: TweetUsageRecord[] }): Array<{
+  clusterId: string;
+  items: Array<{
+    asset: MediaAssetRecord;
+    previewUrl: string | null;
+    usageCount: number;
+    representativeUsageId: string | null;
+    representativeTweetText: string | null;
+    representativeAuthorUsername: string | null;
+    phashMatchCount: number;
+  }>;
+}> {
+  const index = readMediaAssetIndex();
+  if (!index) {
+    return [];
+  }
+
+  const usageGroups = new Map<string, TweetUsageRecord[]>();
+  for (const usage of input.usages) {
+    if (!usage.mediaAssetId) {
+      continue;
+    }
+
+    const current = usageGroups.get(usage.mediaAssetId) ?? [];
+    current.push(usage);
+    usageGroups.set(usage.mediaAssetId, current);
+  }
+
+  const phashMatchMap = buildPhashMatchMap({
+    assets: index.assets,
+    usages: input.usages
+  });
+  const visited = new Set<string>();
+  const clusters: Array<{
+    clusterId: string;
+    items: Array<{
+      asset: MediaAssetRecord;
+      previewUrl: string | null;
+      usageCount: number;
+      representativeUsageId: string | null;
+      representativeTweetText: string | null;
+      representativeAuthorUsername: string | null;
+      phashMatchCount: number;
+    }>;
+  }> = [];
+
+  for (const asset of index.assets) {
+    if (visited.has(asset.assetId) || (phashMatchMap[asset.assetId]?.length ?? 0) === 0) {
+      continue;
+    }
+
+    const queue = [asset.assetId];
+    const component = new Set<string>();
+
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      if (!currentId || visited.has(currentId)) {
+        continue;
+      }
+
+      visited.add(currentId);
+      component.add(currentId);
+
+      for (const match of phashMatchMap[currentId] ?? []) {
+        if (!visited.has(match.asset.assetId)) {
+          queue.push(match.asset.assetId);
+        }
+      }
+    }
+
+    if (component.size < 2) {
+      continue;
+    }
+
+    const items = Array.from(component)
+      .map((assetId) => index.assets.find((item) => item.assetId === assetId))
+      .filter((item): item is MediaAssetRecord => Boolean(item))
+      .map((item) => {
+        const usages = usageGroups.get(item.assetId) ?? [];
+        const representative = usages[0] ?? null;
+
+        return {
+          asset: item,
+          previewUrl: item.posterUrls[0] ?? item.previewUrls[0] ?? item.canonicalMediaUrl,
+          usageCount: item.usageIds.length,
+          representativeUsageId: representative?.usageId ?? null,
+          representativeTweetText: representative?.tweet.text ?? null,
+          representativeAuthorUsername: representative?.tweet.authorUsername ?? null,
+          phashMatchCount: phashMatchMap[item.assetId]?.length ?? 0
+        };
+      })
+      .sort((left, right) => {
+        if (right.phashMatchCount !== left.phashMatchCount) {
+          return right.phashMatchCount - left.phashMatchCount;
+        }
+
+        return right.usageCount - left.usageCount;
+      });
+
+    clusters.push({
+      clusterId: Array.from(component).sort().join("__"),
+      items
+    });
+  }
+
+  return clusters.sort((left, right) => right.items.length - left.items.length);
+}
