@@ -11,38 +11,77 @@ export interface AnalyzeMissingResult {
   totalMissing: number;
 }
 
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 1000) {
+    return `${Math.max(0, Math.round(ms))}ms`;
+  }
+
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
 export async function analyzeMissingUsages(): Promise<AnalyzeMissingResult> {
+  const startedAt = Date.now();
   const data = getDashboardData();
   const missing = data.tweetUsages.filter(
     (usage) => usage.analysis.status !== "complete" && usage.tweet.tweetId
   );
 
-  console.log(`Found ${missing.length} usages missing analysis.`);
+  console.log(
+    `Found ${missing.length} usages missing analysis. interItemDelay=${analysisInterItemDelayMs}ms`
+  );
 
   let completed = 0;
   let skipped = 0;
   let failed = 0;
 
-  for (const usage of missing) {
+  for (const [index, usage] of missing.entries()) {
     if (!usage.tweet.tweetId) {
       skipped += 1;
       continue;
     }
 
-    console.log(`Analyzing ${usage.usageId}...`);
+    const itemStartedAt = Date.now();
+    console.log(
+      `Analyzing ${usage.usageId}... item=${index + 1}/${missing.length} completed=${completed} failed=${failed} skipped=${skipped} elapsed=${formatDuration(itemStartedAt - startedAt)}`
+    );
     try {
       await analyzeAndIndexTweetUsage(usage.tweet.tweetId, usage.mediaIndex);
       completed += 1;
+      const elapsedMs = Date.now() - itemStartedAt;
+      const processed = completed + failed + skipped;
+      const averageMs = processed > 0 ? (Date.now() - startedAt) / processed : 0;
+      const remaining = Math.max(0, missing.length - processed);
+      const etaMs = averageMs * remaining;
+      console.log(
+        `Analysis complete for ${usage.usageId}. item=${index + 1}/${missing.length} duration=${formatDuration(elapsedMs)} completed=${completed} failed=${failed} skipped=${skipped} eta=${formatDuration(etaMs)}`
+      );
     } catch (error) {
       failed += 1;
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Analysis failed for ${usage.usageId}: ${message}`);
+      const elapsedMs = Date.now() - itemStartedAt;
+      console.error(
+        `Analysis failed for ${usage.usageId}. item=${index + 1}/${missing.length} duration=${formatDuration(elapsedMs)} completed=${completed} failed=${failed} skipped=${skipped} error=${message}`
+      );
     }
 
-    if (analysisInterItemDelayMs > 0) {
+    if (analysisInterItemDelayMs > 0 && index < missing.length - 1) {
+      console.log(
+        `Waiting ${analysisInterItemDelayMs}ms before next analysis item... nextItem=${index + 2}/${missing.length}`
+      );
       await delay(analysisInterItemDelayMs);
     }
   }
+
+  console.log(
+    `Analysis sweep finished in ${formatDuration(Date.now() - startedAt)}. completed=${completed} failed=${failed} skipped=${skipped} totalMissing=${missing.length}`
+  );
 
   return {
     completed,

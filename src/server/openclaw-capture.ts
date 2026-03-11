@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { slugify } from "@/src/lib/fs";
+import { inferMediaExtension, inferMediaExtensionFromBuffer, slugify } from "@/src/lib/fs";
+import type { ScrollHumanizerWheelStep } from "@/src/lib/scroll-humanizer";
 import type { CrawlManifest, ExtractedTweet, InterceptedMediaClass } from "@/src/lib/types";
 import { evaluateOnTab, readRequests } from "@/src/server/openclaw-browser";
 
@@ -62,18 +63,45 @@ export async function persistInterceptedUrl(
     return;
   }
 
-  const response = await fetch(url);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  const extension = path.extname(new URL(url).pathname) || ".bin";
-  const filePath = path.join(options.mediaDir, `${slugify(url)}${extension}`);
-  fs.writeFileSync(filePath, buffer);
-  manifest.interceptedMedia.push({
-    url,
-    mediaClass,
-    persisted: true,
-    contentType: response.headers.get("content-type"),
-    filePath: path.relative(options.projectRoot, filePath)
-  });
+  try {
+    const response = await fetch(url);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get("content-type");
+    const safeName = slugify(url) || "asset";
+    const binFilePath = path.join(options.mediaDir, `${safeName}.bin`);
+    const preferredExtension =
+      inferMediaExtension(url, contentType) ??
+      inferMediaExtensionFromBuffer(buffer) ??
+      ".bin";
+    const preferredFilePath = path.join(options.mediaDir, `${safeName}${preferredExtension}`);
+    fs.writeFileSync(binFilePath, buffer);
+
+    let filePath = binFilePath;
+    if (preferredFilePath !== binFilePath) {
+      try {
+        fs.writeFileSync(preferredFilePath, buffer);
+        filePath = preferredFilePath;
+      } catch (error) {
+        console.warn(`Failed to write native media copy for ${url}. Falling back to .bin.`, error);
+      }
+    }
+
+    manifest.interceptedMedia.push({
+      url,
+      mediaClass,
+      persisted: true,
+      contentType,
+      filePath: path.relative(options.projectRoot, filePath)
+    });
+  } catch (error) {
+    console.warn(`Failed to persist intercepted media ${url}.`, error);
+    manifest.interceptedMedia.push({
+      url,
+      mediaClass,
+      persisted: false,
+      contentType: null
+    });
+  }
   persistedUrls.add(url);
 }
 
@@ -116,6 +144,50 @@ export async function wheelTickTab(targetId: string, deltaY: number): Promise<vo
       window.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true }));
       window.scrollBy({ top: deltaY, left: 0, behavior: "auto" });
       return { scrollY: window.scrollY };
+    }`
+  );
+}
+
+export async function wheelBurstTab(targetId: string, steps: ScrollHumanizerWheelStep[]): Promise<void> {
+  await evaluateOnTab(
+    targetId,
+    `async () => {
+      const steps = ${JSON.stringify(steps)};
+      const scroller = document.scrollingElement || document.documentElement || document.body;
+      const waitUntil = (targetTime) =>
+        new Promise((resolve) => {
+          const tick = () => {
+            if (performance.now() >= targetTime) {
+              resolve();
+              return;
+            }
+            window.requestAnimationFrame(tick);
+          };
+          window.requestAnimationFrame(tick);
+        });
+      let nextAt = performance.now();
+
+      for (const step of steps) {
+        const deltaY = Number(step.deltaY) || 0;
+        const delayMs = Math.max(0, Number(step.delayMs) || 0);
+        if (delayMs > 0) {
+          nextAt += delayMs;
+          await waitUntil(nextAt);
+        }
+
+        const wheelEvent = new WheelEvent("wheel", {
+          deltaY,
+          deltaX: 0,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          bubbles: true,
+          cancelable: true
+        });
+        scroller.dispatchEvent(wheelEvent);
+        window.dispatchEvent(wheelEvent);
+        scroller.scrollTop += deltaY;
+      }
+
+      return { scrollY: window.scrollY || 0 };
     }`
   );
 }

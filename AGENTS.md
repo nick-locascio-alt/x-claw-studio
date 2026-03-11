@@ -1,0 +1,94 @@
+# AGENTS.md
+
+This file is for coding agents working in this repository. Read this first, then open the smallest relevant file in `agent_docs/`.
+
+## What This Repo Is
+
+`twitter-trend` is a local-first Next.js app plus CLI pipeline for:
+
+1. Capturing tweets and media from X.
+2. Persisting crawl and analysis artifacts to the local filesystem.
+3. Rebuilding media asset records and duplicate/similarity groupings.
+4. Running Gemini-based usage analysis and optional Chroma facet indexing.
+5. Inspecting the pipeline through a local dashboard.
+
+This repo is not database-backed in the current runtime path. The app reads from JSON files in `data/`.
+
+## Read In This Order
+
+1. [`agent_docs/00-start-here.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/00-start-here.md)
+2. [`agent_docs/10-repo-map.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/10-repo-map.md)
+3. [`agent_docs/20-runtime-flows.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/20-runtime-flows.md)
+4. [`agent_docs/30-data-layout.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/30-data-layout.md)
+5. [`agent_docs/40-operations.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/40-operations.md)
+6. [`agent_docs/50-change-playbooks.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/50-change-playbooks.md)
+7. [`agent_docs/60-decisions.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/60-decisions.md)
+
+## Fast Repo Navigation
+
+- UI entrypoints: [`app/page.tsx`](/Users/nicklocascio/Projects/twitter-trend/app/page.tsx), [`app/matches/page.tsx`](/Users/nicklocascio/Projects/twitter-trend/app/matches/page.tsx), [`app/usage/[usageId]/page.tsx`](/Users/nicklocascio/Projects/twitter-trend/app/usage/[usageId]/page.tsx)
+- UI components: [`src/components`](/Users/nicklocascio/Projects/twitter-trend/src/components)
+- File-backed read model: [`src/server/data.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/data.ts)
+- Capture entrypoints: [`src/cli/crawl-openclaw.ts`](/Users/nicklocascio/Projects/twitter-trend/src/cli/crawl-openclaw.ts), [`src/cli/crawl-timeline.ts`](/Users/nicklocascio/Projects/twitter-trend/src/cli/crawl-timeline.ts), [`src/cli/capture-openclaw-current.ts`](/Users/nicklocascio/Projects/twitter-trend/src/cli/capture-openclaw-current.ts)
+- Capture internals: [`src/server/openclaw-capture.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/openclaw-capture.ts), [`src/server/openclaw-browser.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/openclaw-browser.ts), [`src/lib/extract-tweets.ts`](/Users/nicklocascio/Projects/twitter-trend/src/lib/extract-tweets.ts)
+- Analysis pipeline: [`src/server/analysis-pipeline.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/analysis-pipeline.ts), [`src/server/gemini-analysis.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/gemini-analysis.ts), [`src/server/analysis-store.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/analysis-store.ts)
+- Asset rebuild and grouping: [`src/server/media-assets.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/media-assets.ts), [`src/server/media-fingerprint.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/media-fingerprint.ts), [`src/server/media-embedding.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/media-embedding.ts)
+- Search/indexing: [`src/server/chroma-facets.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/chroma-facets.ts)
+- Scheduler/run control: [`src/server/run-control.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/run-control.ts), [`src/cli/scheduler.ts`](/Users/nicklocascio/Projects/twitter-trend/src/cli/scheduler.ts), [`src/cli/run-stack.ts`](/Users/nicklocascio/Projects/twitter-trend/src/cli/run-stack.ts)
+- Shared contracts: [`src/lib/types.ts`](/Users/nicklocascio/Projects/twitter-trend/src/lib/types.ts), [`src/lib/analysis-schema.ts`](/Users/nicklocascio/Projects/twitter-trend/src/lib/analysis-schema.ts)
+- Tests: [`tests/unit`](/Users/nicklocascio/Projects/twitter-trend/tests/unit), [`tests/integration`](/Users/nicklocascio/Projects/twitter-trend/tests/integration), [`tests/e2e`](/Users/nicklocascio/Projects/twitter-trend/tests/e2e)
+
+## Ground Truth Rules
+
+- Treat `data/` as the runtime source of truth for the current app.
+- Prefer reading the CLI file first for “how is this task triggered?” questions.
+- Prefer reading the matching `src/server/*` file next for business logic.
+- Prefer reading `src/lib/types.ts` before changing payload shape or file contracts.
+- Be careful in a dirty worktree. This repo often has in-progress product changes.
+- Do not assume Chroma or Gemini are available unless env and local services are configured.
+
+## Documentation Maintenance
+
+- Documentation is part of done. If you change behavior, architecture, contracts, workflows, or operator steps, update the relevant docs in the same task.
+- Keep `agent_docs/` progressively disclosed:
+  - high-level orientation in lower-numbered files
+  - deeper subsystem details in later files
+  - cross-link from summary docs to deeper docs instead of duplicating large explanations
+- Update [`agent_docs/10-repo-map.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/10-repo-map.md) when directories, primary entrypoints, or ownership boundaries change.
+- Update [`agent_docs/20-runtime-flows.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/20-runtime-flows.md) when data flow, orchestration, triggers, or external integrations change.
+- Update [`agent_docs/30-data-layout.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/30-data-layout.md) when file formats, storage locations, or shared contracts change.
+- Update [`agent_docs/40-operations.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/40-operations.md) when commands, env requirements, or runbooks change.
+- Update [`agent_docs/50-change-playbooks.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/50-change-playbooks.md) when the recommended path for making changes shifts.
+- Append notable decisions, tradeoffs, and lessons to [`agent_docs/60-decisions.md`](/Users/nicklocascio/Projects/twitter-trend/agent_docs/60-decisions.md) when:
+  - choosing one architecture over another
+  - introducing a new subsystem or external dependency
+  - deliberately keeping a temporary constraint or workaround
+  - learning something non-obvious that future agents would otherwise have to rediscover
+- Prefer short entries with date, context, decision, impact, and follow-up.
+- If a change is too small to justify a decision entry, still update the relevant navigation or flow docs if user-facing or architectural understanding changed.
+
+## Common Tasks
+
+- “Where does the homepage get its data?” Open [`src/server/data.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/data.ts).
+- “How do runs get triggered and logged?” Open [`src/server/run-control.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/run-control.ts).
+- “Where are crawl manifests written?” Inspect `data/raw/*/manifest.json` and the crawl CLI files.
+- “Where are per-usage analyses stored?” Open [`src/server/analysis-store.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/analysis-store.ts).
+- “Where are asset summaries and duplicate groups built?” Open [`src/server/media-assets.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/media-assets.ts).
+- “Where does facet search come from?” Open [`src/server/chroma-facets.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/chroma-facets.ts).
+
+## Commands Agents Will Actually Use
+
+```bash
+npm run dev
+npm run check
+npm run lint
+npm test
+npm run test:integration
+npm run test:e2e
+npm run crawl:openclaw
+npm run crawl:timeline
+npm run analyze:missing
+npm run media:rebuild
+npm run scheduler
+make up
+```

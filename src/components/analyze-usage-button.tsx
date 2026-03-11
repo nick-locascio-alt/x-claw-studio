@@ -13,7 +13,7 @@ export function AnalyzeUsageButton(props: {
   const [message, setMessage] = useState<string | null>(null);
 
   if (!props.tweetId) {
-    return <span className="chip">tweet id missing</span>;
+    return <span className="tt-chip">tweet id missing</span>;
   }
 
   async function analyze(): Promise<void> {
@@ -38,15 +38,15 @@ export function AnalyzeUsageButton(props: {
   }
 
   return (
-    <>
+    <div className="flex flex-wrap items-center gap-3">
       <button
-        className={props.className ?? "actionButton"}
+        className={props.className ?? "tt-button"}
         onClick={() => startTransition(() => void analyze())}
         disabled={isPending}
       >
-        {isPending ? "Analyzing..." : "Start analysis"}
+        <span>{isPending ? "Analyzing..." : "Start analysis"}</span>
       </button>
-      {message ? <span className="chip chipAccent">{message}</span> : null}
-    </>
+      {message ? <span className="tt-chip tt-chip-accent">{message}</span> : null}
+    </div>
   );
 }

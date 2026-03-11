@@ -136,23 +136,12 @@ export async function readRequests(targetId: string, filter?: string): Promise<s
 }
 
 export async function openclawNavigate(targetId: string, url: string): Promise<void> {
-  await execFileAsync(
-    "openclaw",
-    [
-      "browser",
-      "--browser-profile",
-      "chrome",
-      "--timeout",
-      "120000",
-      "navigate",
-      "--target-id",
-      targetId,
-      url
-    ],
-    {
-      cwd: process.cwd(),
-      env: process.env
-    }
+  await evaluateOnTab(
+    targetId,
+    `() => {
+      window.location.assign(${JSON.stringify(url)});
+      return true;
+    }`
   );
 }
 
@@ -188,6 +177,24 @@ export async function openclawRefresh(targetId: string): Promise<void> {
   );
 }
 
+export async function openclawFocus(targetId: string): Promise<void> {
+  await execFileAsync(
+    "openclaw",
+    [
+      "browser",
+      "--browser-profile",
+      "chrome",
+      "focus",
+      targetId
+    ],
+    {
+      cwd: process.cwd(),
+      env: process.env
+    }
+  );
+}
+
+
 export async function chooseAttachedXTab(tabIndex = 0): Promise<OpenClawTab> {
   const tabs = await listChromeTabs();
   const selected = tabs[tabIndex];
@@ -216,4 +223,33 @@ export async function chooseAttachedXTab(tabIndex = 0): Promise<OpenClawTab> {
   }
 
   return selected;
+}
+
+export async function verifyOpenClawTabHealth(tabIndex = 0): Promise<{
+  ok: boolean;
+  tab: OpenClawTab | null;
+  error: string | null;
+}> {
+  try {
+    const tab = await chooseAttachedXTab(tabIndex);
+    await evaluateOnTab(
+      tab.targetId,
+      `() => ({
+        href: window.location.href || null,
+        title: document.title || null
+      })`
+    );
+
+    return {
+      ok: true,
+      tab,
+      error: null
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      tab: null,
+      error: error instanceof Error ? error.message : "OpenClaw tab health check failed"
+    };
+  }
 }

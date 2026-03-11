@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hammingDistanceHex } from "@/src/server/media-fingerprint";
-import { summarizeAnalyses } from "@/src/server/media-assets";
-import type { UsageAnalysis } from "@/src/lib/types";
+import { mergeExistingMediaAssetState, shouldPromoteMediaAssetVideo, summarizeAnalyses } from "@/src/server/media-assets";
+import type { MediaAssetRecord, UsageAnalysis } from "@/src/lib/types";
 
 function buildAnalysis(overrides: Partial<UsageAnalysis>): UsageAnalysis {
   return {
@@ -26,6 +26,9 @@ function buildAnalysis(overrides: Partial<UsageAnalysis>): UsageAnalysis {
     visible_objects: [],
     setting_context: null,
     action_or_event: null,
+    video_music: null,
+    video_sound: null,
+    video_action: null,
     primary_emotion: null,
     emotional_tone: null,
     conveys: null,
@@ -35,6 +38,11 @@ function buildAnalysis(overrides: Partial<UsageAnalysis>): UsageAnalysis {
     metaphor: null,
     humor_mechanism: null,
     cultural_reference: null,
+    reference_entity: null,
+    reference_source: null,
+    reference_plot_context: null,
+    analogy_target: null,
+    analogy_scope: null,
     meme_format: null,
     persuasion_strategy: null,
     brand_signals: [],
@@ -45,6 +53,27 @@ function buildAnalysis(overrides: Partial<UsageAnalysis>): UsageAnalysis {
     search_keywords: [],
     confidence_notes: null,
     usage_notes: null,
+    ...overrides
+  };
+}
+
+function buildAsset(overrides: Partial<MediaAssetRecord>): MediaAssetRecord {
+  return {
+    assetId: "asset-1",
+    canonicalMediaUrl: null,
+    canonicalFilePath: null,
+    promotedVideoSourceUrl: null,
+    promotedVideoFilePath: null,
+    mediaKind: "video_blob",
+    fingerprint: null,
+    similarityEmbedding: null,
+    starred: false,
+    usageIds: [],
+    sourceUrls: [],
+    previewUrls: [],
+    posterUrls: [],
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
     ...overrides
   };
 }
@@ -114,5 +143,42 @@ describe("summarizeAnalyses", () => {
     expect(summary.summary?.has_celebrity).toBe(false);
     expect(summary.summary?.features_female).toBe(true);
     expect(summary.summary?.features_male).toBe(true);
+  });
+});
+
+describe("shouldPromoteMediaAssetVideo", () => {
+  it("promotes starred video assets even without duplicate matches", () => {
+    expect(shouldPromoteMediaAssetVideo(buildAsset({ starred: true }), 1)).toBe(true);
+  });
+
+  it("promotes duplicate video assets when there are two matched usages", () => {
+    expect(shouldPromoteMediaAssetVideo(buildAsset({ starred: false }), 2)).toBe(true);
+  });
+
+  it("does not promote non-video assets based on duplicate count alone", () => {
+    expect(shouldPromoteMediaAssetVideo(buildAsset({ mediaKind: "image" }), 3)).toBe(false);
+  });
+});
+
+describe("mergeExistingMediaAssetState", () => {
+  it("preserves promoted video fields from an existing asset record", () => {
+    const merged = mergeExistingMediaAssetState(
+      buildAsset({
+        assetId: "asset-video",
+        promotedVideoSourceUrl: null,
+        promotedVideoFilePath: null,
+        createdAt: new Date(1000).toISOString()
+      }),
+      buildAsset({
+        assetId: "asset-video",
+        promotedVideoSourceUrl: "https://video.twimg.com/example.m3u8",
+        promotedVideoFilePath: "data/analysis/media-assets/videos/asset-video.mp4",
+        createdAt: new Date(0).toISOString()
+      })
+    );
+
+    expect(merged.promotedVideoSourceUrl).toBe("https://video.twimg.com/example.m3u8");
+    expect(merged.promotedVideoFilePath).toBe("data/analysis/media-assets/videos/asset-video.mp4");
+    expect(merged.createdAt).toBe(new Date(0).toISOString());
   });
 });

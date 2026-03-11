@@ -19,6 +19,8 @@ export default async function UsageDetailPage({
   return (
     <AnalysisDetail
       usageId={detail.usageId}
+      tweetId={detail.tweet.tweetId}
+      mediaIndex={detail.mediaIndex}
       tweet={{
         tweetUrl: detail.tweet.tweetUrl,
         text: detail.tweet.text,

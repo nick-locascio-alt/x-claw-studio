@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { setMediaAssetStarred } from "@/src/server/media-assets";
+import { getDashboardData } from "@/src/server/data";
+import {
+  buildMediaAssetIndex,
+  buildMediaAssetSummaries,
+  promoteStarredAssetVideo,
+  setMediaAssetStarred
+} from "@/src/server/media-assets";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as { assetId?: string; starred?: boolean };
@@ -12,6 +18,19 @@ export async function POST(request: Request) {
   if (!updated) {
     return NextResponse.json({ error: "Unknown asset" }, { status: 404 });
   }
+
+  const data = getDashboardData();
+  const assetIndex = await buildMediaAssetIndex({
+    usages: data.tweetUsages,
+    manifests: data.manifests
+  });
+  if (body.starred) {
+    await promoteStarredAssetVideo(body.assetId);
+  }
+  buildMediaAssetSummaries({
+    usages: data.tweetUsages,
+    assetIndex
+  });
 
   return NextResponse.json({ assetId: body.assetId, starred: body.starred });
 }

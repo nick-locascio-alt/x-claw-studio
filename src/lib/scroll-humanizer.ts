@@ -2,12 +2,18 @@ export interface ScrollHumanizerDriver {
   refresh(): Promise<void>;
   wait(ms: number): Promise<void>;
   wheelTick(input: { deltaY: number }): Promise<void>;
+  wheelBurst?(steps: ScrollHumanizerWheelStep[]): Promise<void>;
 }
 
 export interface ScrollHumanizerAction {
   kind: "wait" | "wheel";
   ms?: number;
   deltaY?: number;
+}
+
+export interface ScrollHumanizerWheelStep {
+  deltaY: number;
+  delayMs: number;
 }
 
 export interface ScrollCycleBounds {
@@ -30,6 +36,10 @@ export interface ScrollHumanizerOptions {
   wheelTickMaxPx?: number;
   wheelTickPauseMinMs?: number;
   wheelTickPauseMaxMs?: number;
+  wheelNotchMinPx?: number;
+  wheelNotchMaxPx?: number;
+  wheelMicroStepsMin?: number;
+  wheelMicroStepsMax?: number;
   wheelReverseTickChance?: number;
   wheelReverseTickRatioMin?: number;
   wheelReverseTickRatioMax?: number;
@@ -49,10 +59,14 @@ const defaultOptions = {
   scrollStepMaxPx: 720,
   scrollStepPauseMinMs: 500,
   scrollStepPauseMaxMs: 1400,
-  wheelTickMinPx: 24,
-  wheelTickMaxPx: 140,
-  wheelTickPauseMinMs: 12,
-  wheelTickPauseMaxMs: 70,
+  wheelTickMinPx: 2,
+  wheelTickMaxPx: 14,
+  wheelTickPauseMinMs: 2,
+  wheelTickPauseMaxMs: 8,
+  wheelNotchMinPx: 96,
+  wheelNotchMaxPx: 144,
+  wheelMicroStepsMin: 8,
+  wheelMicroStepsMax: 16,
   wheelReverseTickChance: 0.14,
   wheelReverseTickRatioMin: 0.12,
   wheelReverseTickRatioMax: 0.38,
@@ -75,6 +89,10 @@ function randomRatio(min: number, max: number, random: () => number): number {
   const safeMin = Math.min(min, max);
   const safeMax = Math.max(min, max);
   return safeMin + (safeMax - safeMin) * random();
+}
+
+function sum(values: number[]): number {
+  return values.reduce((total, value) => total + value, 0);
 }
 
 function resolveOptions(options: ScrollHumanizerOptions) {
@@ -145,28 +163,54 @@ function pushWheelBurst(
   let remaining = Math.abs(totalDeltaY);
 
   while (remaining > 0) {
-    const tickMagnitude = Math.min(
+    const notchMagnitude = Math.min(
       remaining,
-      randomInt(options.wheelTickMinPx, options.wheelTickMaxPx, options.random)
+      randomInt(options.wheelNotchMinPx, options.wheelNotchMaxPx, options.random)
     );
-
-    actions.push({
-      kind: "wheel",
-      deltaY: direction * tickMagnitude
+    const microStepCount = randomInt(options.wheelMicroStepsMin, options.wheelMicroStepsMax, options.random);
+    const weights = Array.from({ length: microStepCount }, (_, index) => {
+      const position = microStepCount === 1 ? 0.5 : index / (microStepCount - 1);
+      const eased = Math.sin(position * Math.PI);
+      return 0.6 + eased;
     });
+    const totalWeight = sum(weights);
+    let consumed = 0;
 
-    remaining -= tickMagnitude;
+    for (let stepIndex = 0; stepIndex < microStepCount; stepIndex += 1) {
+      const remainingSteps = microStepCount - stepIndex;
+      const weightedTarget =
+        stepIndex === microStepCount - 1
+          ? notchMagnitude - consumed
+          : Math.round((notchMagnitude * weights[stepIndex]) / totalWeight);
+      const stepMagnitude = Math.min(
+        notchMagnitude - consumed - Math.max(0, remainingSteps - 1),
+        Math.max(
+          1,
+          Math.min(
+            weightedTarget,
+            randomInt(options.wheelTickMinPx, options.wheelTickMaxPx, options.random)
+          )
+        )
+      );
 
-    actions.push({
-      kind: "wait",
-      ms: randomInt(options.wheelTickPauseMinMs, options.wheelTickPauseMaxMs, options.random)
-    });
+      consumed += stepMagnitude;
+      actions.push({
+        kind: "wheel",
+        deltaY: direction * stepMagnitude
+      });
+      actions.push({
+        kind: "wait",
+        ms: randomInt(options.wheelTickPauseMinMs, options.wheelTickPauseMaxMs, options.random)
+      });
+    }
+
+    remaining -= notchMagnitude;
 
     if (remaining > 0 && options.random() < options.wheelReverseTickChance) {
       const reverseMagnitude = Math.max(
-        4,
+        2,
         Math.round(
-          tickMagnitude *
+          notchMagnitude *
             randomRatio(options.wheelReverseTickRatioMin, options.wheelReverseTickRatioMax, options.random)
         )
       );
@@ -179,12 +223,37 @@ function pushWheelBurst(
         ms: randomInt(options.wheelTickPauseMinMs, options.wheelTickPauseMaxMs, options.random)
       });
     }
+
+    actions.push({
+      kind: "wait",
+      ms: randomInt(10, 28, options.random)
+    });
   }
 
   actions.push({
     kind: "wait",
     ms: randomInt(options.scrollStepPauseMinMs, options.scrollStepPauseMaxMs, options.random)
   });
+}
+
+export function collapseWheelBurstActions(actions: ScrollHumanizerAction[]): ScrollHumanizerWheelStep[] {
+  const steps: ScrollHumanizerWheelStep[] = [];
+
+  for (const action of actions) {
+    if (action.kind === "wheel" && action.deltaY !== undefined) {
+      steps.push({
+        deltaY: action.deltaY,
+        delayMs: 0
+      });
+      continue;
+    }
+
+    if (action.kind === "wait" && action.ms && steps.length > 0) {
+      steps[steps.length - 1].delayMs += action.ms;
+    }
+  }
+
+  return steps;
 }
 
 export function createScrollHumanizer(options: ScrollHumanizerOptions) {
@@ -208,6 +277,11 @@ export function createScrollHumanizer(options: ScrollHumanizerOptions) {
 
     async scroll(driver: ScrollHumanizerDriver, bounds?: ScrollCycleBounds): Promise<void> {
       const actions = buildScrollCycleActions(options, bounds);
+
+      if (driver.wheelBurst) {
+        await driver.wheelBurst(collapseWheelBurstActions(actions));
+        return;
+      }
 
       for (const action of actions) {
         if (action.kind === "wait" && action.ms) {

@@ -15,7 +15,9 @@ import type {
   UsageAnalysis
 } from "@/src/lib/types";
 import { hammingDistanceHex, computeDifferenceHash } from "@/src/server/media-fingerprint";
+import { computeImageEmbedding, cosineSimilarity } from "@/src/server/media-embedding";
 import { readAllUsageAnalyses } from "@/src/server/analysis-store";
+import { analyzeMediaAssetVideo, promoteMediaAssetVideo, readAllAssetVideoAnalyses } from "@/src/server/media-asset-video";
 
 const projectRoot = process.cwd();
 const assetDir = path.join(projectRoot, "data", "analysis", "media-assets");
@@ -47,8 +49,17 @@ interface MediaCandidate {
   filePath: string | null;
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
 const EXACT_ASSET_MATCH_DISTANCE = 2;
 const DEFAULT_PHASH_MATCH_DISTANCE = 4;
+const DEFAULT_MEDIA_MATCH_SIMILARITY = Number(process.env.GEMINI_MEDIA_MATCH_THRESHOLD || 0.965);
 
 function readJsonFile<T>(filePath: string): T | null {
   if (!fs.existsSync(filePath)) {
@@ -65,6 +76,23 @@ function normalizeMediaUrl(media: TweetMedia): string | null {
 function readStarredAssetIds(): Set<string> {
   const file = readJsonFile<MediaAssetStarsFile>(assetStarsPath);
   return new Set(file?.starredAssetIds ?? []);
+}
+
+export function shouldPromoteMediaAssetVideo(asset: MediaAssetRecord, duplicateGroupUsageCount: number): boolean {
+  return ["video", "video_hls", "video_blob"].includes(asset.mediaKind) && (asset.starred || duplicateGroupUsageCount >= 2);
+}
+
+export function mergeExistingMediaAssetState(asset: MediaAssetRecord, existingAsset: MediaAssetRecord | null): MediaAssetRecord {
+  if (!existingAsset) {
+    return asset;
+  }
+
+  return {
+    ...asset,
+    promotedVideoSourceUrl: existingAsset.promotedVideoSourceUrl ?? asset.promotedVideoSourceUrl,
+    promotedVideoFilePath: existingAsset.promotedVideoFilePath ?? asset.promotedVideoFilePath,
+    createdAt: existingAsset.createdAt ?? asset.createdAt
+  };
 }
 
 function writeStarredAssetIds(assetIds: Iterable<string>): void {
@@ -139,6 +167,9 @@ function createUsageAnalysisFallback(candidate: MediaCandidate): UsageAnalysis {
     visible_objects: [],
     setting_context: null,
     action_or_event: null,
+    video_music: null,
+    video_sound: null,
+    video_action: null,
     primary_emotion: null,
     emotional_tone: null,
     conveys: null,
@@ -148,6 +179,11 @@ function createUsageAnalysisFallback(candidate: MediaCandidate): UsageAnalysis {
     metaphor: null,
     humor_mechanism: null,
     cultural_reference: null,
+    reference_entity: null,
+    reference_source: null,
+    reference_plot_context: null,
+    analogy_target: null,
+    analogy_scope: null,
     meme_format: null,
     persuasion_strategy: null,
     brand_signals: [],
@@ -227,6 +263,9 @@ export function summarizeAnalyses(assetId: string, analyses: UsageAnalysis[]): M
     visible_objects: mergeAnalysisArrays(completeAnalyses.map((analysis) => analysis.visible_objects)),
     setting_context: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.setting_context)),
     action_or_event: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.action_or_event)),
+    video_music: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.video_music)),
+    video_sound: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.video_sound)),
+    video_action: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.video_action)),
     primary_emotion: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.primary_emotion)),
     emotional_tone: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.emotional_tone)),
     conveys: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.conveys)),
@@ -238,6 +277,11 @@ export function summarizeAnalyses(assetId: string, analyses: UsageAnalysis[]): M
     metaphor: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.metaphor)),
     humor_mechanism: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.humor_mechanism)),
     cultural_reference: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.cultural_reference)),
+    reference_entity: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.reference_entity)),
+    reference_source: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.reference_source)),
+    reference_plot_context: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.reference_plot_context)),
+    analogy_target: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.analogy_target)),
+    analogy_scope: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.analogy_scope)),
     meme_format: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.meme_format)),
     persuasion_strategy: mergeAnalysisValues(completeAnalyses.map((analysis) => analysis.persuasion_strategy)),
     brand_signals: mergeAnalysisArrays(completeAnalyses.map((analysis) => analysis.brand_signals)),
@@ -319,11 +363,29 @@ function buildMediaCandidates(usages: TweetUsageRecord[], manifests: CrawlManife
   }));
 }
 
+function buildUsageGroups(usages: TweetUsageRecord[]): Map<string, TweetUsageRecord[]> {
+  const usageGroups = new Map<string, TweetUsageRecord[]>();
+
+  for (const usage of usages) {
+    if (!usage.mediaAssetId) {
+      continue;
+    }
+
+    const current = usageGroups.get(usage.mediaAssetId) ?? [];
+    current.push(usage);
+    usageGroups.set(usage.mediaAssetId, current);
+  }
+
+  return usageGroups;
+}
+
 export async function buildMediaAssetIndex(input: {
   usages: TweetUsageRecord[];
   manifests: CrawlManifest[];
 }): Promise<MediaAssetIndexFile> {
   const candidates = buildMediaCandidates(input.usages, input.manifests);
+  const existingIndex = readJsonFile<MediaAssetIndexFile>(assetIndexPath);
+  const existingAssetsById = new Map((existingIndex?.assets ?? []).map((asset) => [asset.assetId, asset]));
   const assets: MediaAssetRecord[] = [];
   const usageToAssetId: Record<string, string> = {};
   const now = new Date().toISOString();
@@ -355,12 +417,15 @@ export async function buildMediaAssetIndex(input: {
       ? `asset-${fingerprint.hex}`
       : buildFallbackAssetId(candidate);
 
-    const record: MediaAssetRecord = {
+    const record = mergeExistingMediaAssetState({
       assetId,
       canonicalMediaUrl: normalizeMediaUrl(candidate.media),
       canonicalFilePath: candidate.filePath ? path.relative(projectRoot, candidate.filePath) : null,
+      promotedVideoSourceUrl: null,
+      promotedVideoFilePath: null,
       mediaKind: candidate.media.mediaKind,
       fingerprint,
+      similarityEmbedding: candidate.filePath ? await computeImageEmbedding(candidate.filePath) : null,
       starred: starredAssetIds.has(assetId),
       usageIds: [candidate.usageId],
       sourceUrls: findRelatedSourceUrls(candidate.media, input.manifests),
@@ -368,7 +433,7 @@ export async function buildMediaAssetIndex(input: {
       posterUrls: candidate.media.posterUrl ? [candidate.media.posterUrl] : [],
       createdAt: now,
       updatedAt: now
-    };
+    }, existingAssetsById.get(assetId) ?? null);
 
     assets.push(record);
     usageToAssetId[candidate.usageId] = assetId;
@@ -380,6 +445,40 @@ export async function buildMediaAssetIndex(input: {
     asset.sourceUrls = dedupe(asset.sourceUrls);
     asset.previewUrls = dedupe(asset.previewUrls);
     asset.posterUrls = dedupe(asset.posterUrls);
+  }
+
+  const usagesWithAssetIds = input.usages.map((usage) => ({
+    ...usage,
+    mediaAssetId: usageToAssetId[usage.usageId] ?? usage.mediaAssetId
+  }));
+  const duplicateGroupMap = buildDuplicateGroupMap({
+    assets,
+    usages: usagesWithAssetIds
+  });
+  const usageGroups = buildUsageGroups(usagesWithAssetIds);
+
+  for (let assetIndex = 0; assetIndex < assets.length; assetIndex += 1) {
+    const asset = assets[assetIndex];
+    const duplicateGroupUsageCount = asset.usageIds.reduce((max, usageId) => {
+      const duplicateGroup = duplicateGroupMap[usageId];
+      return Math.max(max, duplicateGroup?.usageIds.length ?? asset.usageIds.length);
+    }, asset.usageIds.length);
+
+    if (!shouldPromoteMediaAssetVideo(asset, duplicateGroupUsageCount)) {
+      continue;
+    }
+
+    try {
+      const promotedAsset = await promoteMediaAssetVideo(asset);
+      assets[assetIndex] = promotedAsset;
+
+      if (promotedAsset.promotedVideoFilePath) {
+        const representativeUsage = (usageGroups.get(promotedAsset.assetId) ?? [])[0] ?? null;
+        await analyzeMediaAssetVideo(promotedAsset, representativeUsage);
+      }
+    } catch (error) {
+      console.warn(`Skipping promoted video processing for ${asset.assetId}. ${getErrorMessage(error)}`);
+    }
   }
 
   const index: MediaAssetIndexFile = {
@@ -398,6 +497,9 @@ export function buildMediaAssetSummaries(input: {
   assetIndex: MediaAssetIndexFile;
 }): MediaAssetSummaryFile {
   const analysisMap = new Map(readAllUsageAnalyses().map((analysis) => [analysis.usageId, analysis]));
+  const assetVideoAnalysisMap = new Map(
+    readAllAssetVideoAnalyses().map((analysis) => [analysis.usageId.replace("::video", ""), analysis])
+  );
   const usageFallbackMap = new Map(
     input.usages.map((usage) => [usage.usageId, usage.analysis ?? createUsageAnalysisFallback({
       usageId: usage.usageId,
@@ -407,12 +509,21 @@ export function buildMediaAssetSummaries(input: {
       filePath: null
     })])
   );
-  const summaries = input.assetIndex.assets.map((asset) =>
-    summarizeAnalyses(
-      asset.assetId,
-      asset.usageIds.map((usageId) => analysisMap.get(usageId) ?? usageFallbackMap.get(usageId)).filter(Boolean) as UsageAnalysis[]
-    )
-  );
+  const summaries = input.assetIndex.assets.map((asset) => {
+    const preferredVideoAnalysis = assetVideoAnalysisMap.get(asset.assetId) ?? null;
+    const sourceAnalyses = preferredVideoAnalysis
+      ? [preferredVideoAnalysis]
+      : asset.usageIds.map((usageId) => analysisMap.get(usageId) ?? usageFallbackMap.get(usageId)).filter(Boolean);
+    const summary = summarizeAnalyses(asset.assetId, sourceAnalyses as UsageAnalysis[]);
+
+    return {
+      ...summary,
+      usageCount: asset.usageIds.length,
+      completeAnalysisCount: preferredVideoAnalysis
+        ? 1
+        : sourceAnalyses.filter((analysis) => analysis?.status === "complete").length
+    };
+  });
 
   const file: MediaAssetSummaryFile = {
     generatedAt: new Date().toISOString(),
@@ -457,23 +568,66 @@ export function setMediaAssetStarred(assetId: string, starred: boolean): boolean
   return true;
 }
 
+export async function promoteStarredAssetVideo(assetId: string): Promise<MediaAssetRecord | null> {
+  const index = readMediaAssetIndex();
+  if (!index) {
+    return null;
+  }
+
+  const assetIndex = index.assets.findIndex((asset) => asset.assetId === assetId);
+  if (assetIndex === -1) {
+    return null;
+  }
+
+  const asset = index.assets[assetIndex];
+  if (!asset.starred || !["video", "video_hls", "video_blob"].includes(asset.mediaKind)) {
+    return asset;
+  }
+
+  const promotedAsset = await promoteMediaAssetVideo(asset);
+  if (promotedAsset.promotedVideoFilePath === asset.promotedVideoFilePath) {
+    return promotedAsset;
+  }
+
+  const nextIndex: MediaAssetIndexFile = {
+    ...index,
+    generatedAt: new Date().toISOString(),
+    assets: index.assets.map((currentAsset, currentIndex) =>
+      currentIndex === assetIndex ? promotedAsset : currentAsset
+    )
+  };
+
+  ensureDir(assetDir);
+  writeJson(assetIndexPath, nextIndex);
+  return promotedAsset;
+}
+
 export function buildPhashMatchMap(input: {
   assets: MediaAssetRecord[];
   usages: TweetUsageRecord[];
   maxDistance?: number;
+  minSimilarity?: number;
+}): Record<string, MediaAssetPhashMatch[]> {
+  return buildAssetSimilarityMap({
+    assets: input.assets,
+    usages: input.usages,
+    maxDistance: input.maxDistance,
+    minSimilarity: input.minSimilarity,
+    includeAllNeighbors: false
+  });
+}
+
+function buildAssetSimilarityMap(input: {
+  assets: MediaAssetRecord[];
+  usages: TweetUsageRecord[];
+  maxDistance?: number;
+  minSimilarity?: number;
+  includeAllNeighbors: boolean;
+  limitPerAsset?: number;
 }): Record<string, MediaAssetPhashMatch[]> {
   const maxDistance = input.maxDistance ?? DEFAULT_PHASH_MATCH_DISTANCE;
-  const usageGroups = new Map<string, TweetUsageRecord[]>();
-
-  for (const usage of input.usages) {
-    if (!usage.mediaAssetId) {
-      continue;
-    }
-
-    const current = usageGroups.get(usage.mediaAssetId) ?? [];
-    current.push(usage);
-    usageGroups.set(usage.mediaAssetId, current);
-  }
+  const minSimilarity = input.minSimilarity ?? DEFAULT_MEDIA_MATCH_SIMILARITY;
+  const usageGroups = buildUsageGroups(input.usages);
 
   const matchMap: Record<string, MediaAssetPhashMatch[]> = Object.fromEntries(
     input.assets.map((asset) => [asset.assetId, []])
@@ -481,29 +635,58 @@ export function buildPhashMatchMap(input: {
 
   for (let index = 0; index < input.assets.length; index += 1) {
     const left = input.assets[index];
-    if (!left.fingerprint?.hex) {
+    if (!left.fingerprint?.hex && !left.similarityEmbedding?.values?.length) {
       continue;
     }
 
     for (let compareIndex = index + 1; compareIndex < input.assets.length; compareIndex += 1) {
       const right = input.assets[compareIndex];
       if (!right.fingerprint?.hex) {
-        continue;
+        if (!right.similarityEmbedding?.values?.length) {
+          continue;
+        }
       }
 
-      const distance = hammingDistanceHex(left.fingerprint.hex, right.fingerprint.hex);
-      if (distance > maxDistance) {
-        continue;
+      let distance: number | null = null;
+      let similarityScore = Number.NEGATIVE_INFINITY;
+
+      const leftEmbedding = left.similarityEmbedding;
+      const rightEmbedding = right.similarityEmbedding;
+      if (
+        leftEmbedding != null &&
+        rightEmbedding != null &&
+        leftEmbedding.values.length > 0 &&
+        rightEmbedding.values.length > 0 &&
+        leftEmbedding.model === rightEmbedding.model &&
+        leftEmbedding.outputDimensionality === rightEmbedding.outputDimensionality
+      ) {
+        similarityScore = cosineSimilarity(leftEmbedding.values, rightEmbedding.values);
+        if (!input.includeAllNeighbors && similarityScore < minSimilarity) {
+          continue;
+        }
+      } else {
+        if (!left.fingerprint?.hex || !right.fingerprint?.hex) {
+          continue;
+        }
+
+        distance = hammingDistanceHex(left.fingerprint.hex, right.fingerprint.hex);
+        if (!input.includeAllNeighbors && distance > maxDistance) {
+          continue;
+        }
+
+        similarityScore = 1 - distance / 64;
       }
 
       matchMap[left.assetId].push({
         asset: right,
         distance,
+        similarityScore,
         usages: usageGroups.get(right.assetId) ?? []
       });
       matchMap[right.assetId].push({
         asset: left,
         distance,
+        similarityScore,
         usages: usageGroups.get(left.assetId) ?? []
       });
     }
@@ -511,15 +694,99 @@ export function buildPhashMatchMap(input: {
 
   for (const assetId of Object.keys(matchMap)) {
     matchMap[assetId].sort((left, right) => {
-      if (left.distance !== right.distance) {
-        return left.distance - right.distance;
+      if (left.similarityScore !== right.similarityScore) {
+        return right.similarityScore - left.similarityScore;
+      }
+
+      if ((left.distance ?? Number.MAX_SAFE_INTEGER) !== (right.distance ?? Number.MAX_SAFE_INTEGER)) {
+        return (left.distance ?? Number.MAX_SAFE_INTEGER) - (right.distance ?? Number.MAX_SAFE_INTEGER);
       }
 
       return right.usages.length - left.usages.length;
     });
+
+    if (input.limitPerAsset && input.limitPerAsset > 0) {
+      matchMap[assetId] = matchMap[assetId].slice(0, input.limitPerAsset);
+    }
   }
 
   return matchMap;
+}
+
+function buildNearestNeighborMap(input: {
+  assets: MediaAssetRecord[];
+  usages: TweetUsageRecord[];
+  limit?: number;
+}): Record<string, MediaAssetPhashMatch[]> {
+  return buildAssetSimilarityMap({
+    assets: input.assets,
+    usages: input.usages,
+    includeAllNeighbors: true,
+    limitPerAsset: input.limit ?? 10
+  });
+}
+
+export function buildDuplicateGroupMap(input: {
+  assets: MediaAssetRecord[];
+  usages: TweetUsageRecord[];
+}): Record<string, { groupId: string; usageIds: string[] }> {
+  const phashMatchMap = buildPhashMatchMap({
+    assets: input.assets,
+    usages: input.usages
+  });
+  const usageGroups = new Map<string, string[]>();
+
+  for (const usage of input.usages) {
+    if (!usage.mediaAssetId) {
+      continue;
+    }
+
+    const current = usageGroups.get(usage.mediaAssetId) ?? [];
+    current.push(usage.usageId);
+    usageGroups.set(usage.mediaAssetId, current);
+  }
+
+  const visited = new Set<string>();
+  const duplicateGroupMap: Record<string, { groupId: string; usageIds: string[] }> = {};
+
+  for (const asset of input.assets) {
+    if (visited.has(asset.assetId)) {
+      continue;
+    }
+
+    const queue = [asset.assetId];
+    const component = new Set<string>();
+
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      if (!currentId || visited.has(currentId)) {
+        continue;
+      }
+
+      visited.add(currentId);
+      component.add(currentId);
+
+      for (const match of phashMatchMap[currentId] ?? []) {
+        if (!visited.has(match.asset.assetId)) {
+          queue.push(match.asset.assetId);
+        }
+      }
+    }
+
+    const groupUsageIds = Array.from(component)
+      .flatMap((assetId) => usageGroups.get(assetId) ?? [])
+      .sort();
+    const groupId = Array.from(component).sort().join("__");
+
+    for (const usageId of groupUsageIds) {
+      duplicateGroupMap[usageId] = {
+        groupId,
+        usageIds: groupUsageIds
+      };
+    }
+  }
+
+  return duplicateGroupMap;
 }
 
 export function getMediaAssetView(input: {
@@ -546,12 +813,18 @@ export function getMediaAssetView(input: {
     assets: index.assets,
     usages: input.usages
   });
+  const nearestNeighborMap = buildNearestNeighborMap({
+    assets: index.assets,
+    usages: input.usages,
+    limit: 10
+  });
 
   return {
     asset,
     summary: summaries?.summaries.find((item) => item.assetId === assetId) ?? null,
     duplicateUsages: input.usages.filter((usage) => asset.usageIds.includes(usage.usageId)),
-    phashMatches: phashMatchMap[assetId] ?? []
+    phashMatches: phashMatchMap[assetId] ?? [],
+    nearestNeighbors: nearestNeighborMap[assetId] ?? []
   };
 }
 

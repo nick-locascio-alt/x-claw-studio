@@ -2,7 +2,7 @@ import "@/src/lib/env";
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type LaunchOptions, type Response } from "playwright";
-import { ensureDir, slugify, writeJson } from "@/src/lib/fs";
+import { ensureDir, inferMediaExtension, inferMediaExtensionFromBuffer, slugify, writeJson } from "@/src/lib/fs";
 import { extractTweetsFromHtml } from "@/src/lib/extract-tweets";
 import { createScrollHumanizer, type ScrollHumanizerDriver } from "@/src/lib/scroll-humanizer";
 import { analyzeMissingUsages } from "@/src/server/analyze-missing";
@@ -26,7 +26,7 @@ ensureDir(htmlDir);
 ensureDir(mediaDir);
 
 const baseUrl = process.env.X_TIMELINE_URL || "https://x.com/home";
-const maxScrolls = Number(process.env.MAX_SCROLLS || 25);
+const maxScrolls = Number(process.env.MAX_SCROLLS || 125);
 const scrollPauseMs = Number(process.env.SCROLL_PAUSE_MS || 2500);
 const downloadImages = process.env.DOWNLOAD_IMAGES !== "0";
 const downloadVideoPosters = process.env.DOWNLOAD_VIDEO_POSTERS !== "0";
@@ -86,20 +86,45 @@ async function persistUrl(
 
   downloaded.add(url);
   const safeName = slugify(url) || "asset";
-  const extension = path.extname(new URL(url).pathname) || ".bin";
-  const filePath = path.join(mediaDir, `${safeName}${extension}`);
-  const response = await fetch(url);
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  fs.writeFileSync(filePath, buffer);
+  try {
+    const response = await fetch(url);
+    const contentType = response.headers.get("content-type");
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const binFilePath = path.join(mediaDir, `${safeName}.bin`);
+    const preferredExtension =
+      inferMediaExtension(url, contentType) ??
+      inferMediaExtensionFromBuffer(buffer) ??
+      ".bin";
+    const preferredFilePath = path.join(mediaDir, `${safeName}${preferredExtension}`);
+    fs.writeFileSync(binFilePath, buffer);
 
-  return {
-    url,
-    mediaClass,
-    persisted: true,
-    contentType: response.headers.get("content-type"),
-    filePath: path.relative(projectRoot, filePath)
-  };
+    let filePath = binFilePath;
+    if (preferredFilePath !== binFilePath) {
+      try {
+        fs.writeFileSync(preferredFilePath, buffer);
+        filePath = preferredFilePath;
+      } catch (error) {
+        console.warn(`Failed to write native media copy for ${url}. Falling back to .bin.`, error);
+      }
+    }
+
+    return {
+      url,
+      mediaClass,
+      persisted: true,
+      contentType,
+      filePath: path.relative(projectRoot, filePath)
+    };
+  } catch (error) {
+    console.warn(`Failed to persist intercepted media ${url}.`, error);
+    return {
+      url,
+      mediaClass,
+      persisted: false,
+      contentType: null
+    };
+  }
 }
 
 function pushInterceptedMedia(record: InterceptedMediaRecord): void {
@@ -236,7 +261,15 @@ async function run(): Promise<void> {
   const driver: ScrollHumanizerDriver = {
     refresh: () => page.reload({ waitUntil: "domcontentloaded" }).then(() => undefined),
     wait: (ms: number) => page.waitForTimeout(ms),
-    wheelTick: ({ deltaY }) => page.mouse.wheel(0, deltaY)
+    wheelTick: ({ deltaY }) => page.mouse.wheel(0, deltaY),
+    wheelBurst: async (steps) => {
+      for (const step of steps) {
+        await page.mouse.wheel(0, step.deltaY);
+        if (step.delayMs > 0) {
+          await page.waitForTimeout(step.delayMs);
+        }
+      }
+    }
   };
 
   page.on("response", (response) => {

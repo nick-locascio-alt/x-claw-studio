@@ -7,9 +7,13 @@ function buildUsage(usageId: string, mediaAssetId: string): TweetUsageRecord {
     usageId,
     mediaAssetId,
     mediaLocalFilePath: null,
+    mediaPlayableFilePath: null,
     mediaAssetStarred: false,
     mediaAssetUsageCount: 1,
     phashMatchCount: 0,
+    duplicateGroupId: mediaAssetId,
+    duplicateGroupUsageCount: 1,
+    hotnessScore: 0,
     mediaIndex: 0,
     tweet: {
       sourceName: "test",
@@ -63,6 +67,9 @@ function buildUsage(usageId: string, mediaAssetId: string): TweetUsageRecord {
       visible_objects: [],
       setting_context: null,
       action_or_event: null,
+      video_music: null,
+      video_sound: null,
+      video_action: null,
       primary_emotion: null,
       emotional_tone: null,
       conveys: null,
@@ -72,6 +79,11 @@ function buildUsage(usageId: string, mediaAssetId: string): TweetUsageRecord {
       metaphor: null,
       humor_mechanism: null,
       cultural_reference: null,
+      reference_entity: null,
+      reference_source: null,
+      reference_plot_context: null,
+      analogy_target: null,
+      analogy_scope: null,
       meme_format: null,
       persuasion_strategy: null,
       brand_signals: [],
@@ -91,6 +103,8 @@ function buildAsset(assetId: string, hex: string): MediaAssetRecord {
     assetId,
     canonicalMediaUrl: null,
     canonicalFilePath: null,
+    promotedVideoSourceUrl: null,
+    promotedVideoFilePath: null,
     mediaKind: "image",
     fingerprint: {
       algorithm: "dhash_8x8",
@@ -99,6 +113,7 @@ function buildAsset(assetId: string, hex: string): MediaAssetRecord {
       width: 8,
       height: 8
     },
+    similarityEmbedding: null,
     starred: false,
     usageIds: [`${assetId}-usage`],
     sourceUrls: [],
@@ -131,5 +146,43 @@ describe("buildPhashMatchMap", () => {
       ["asset-c", 2]
     ]);
     expect(result["asset-d"]).toEqual([]);
+  });
+
+  it("prefers Gemini embedding similarity when embeddings exist", () => {
+    const assets = [
+      {
+        ...buildAsset("asset-a", "0000000000000000"),
+        similarityEmbedding: {
+          model: "gemini-embedding-2-preview",
+          outputDimensionality: 3,
+          taskType: "SEMANTIC_SIMILARITY" as const,
+          modality: "image" as const,
+          normalized: true,
+          values: [1, 0, 0]
+        }
+      },
+      {
+        ...buildAsset("asset-b", "ffffffffffffffff"),
+        similarityEmbedding: {
+          model: "gemini-embedding-2-preview",
+          outputDimensionality: 3,
+          taskType: "SEMANTIC_SIMILARITY" as const,
+          modality: "image" as const,
+          normalized: true,
+          values: [0.99, 0.01, 0]
+        }
+      }
+    ];
+    const usages = [
+      buildUsage("asset-a-usage", "asset-a"),
+      buildUsage("asset-b-usage", "asset-b")
+    ];
+
+    const result = buildPhashMatchMap({ assets, usages, minSimilarity: 0.98 });
+
+    expect(result["asset-a"]).toHaveLength(1);
+    expect(result["asset-a"][0]?.asset.assetId).toBe("asset-b");
+    expect(result["asset-a"][0]?.distance).toBeNull();
+    expect(result["asset-a"][0]?.similarityScore).toBeGreaterThan(0.98);
   });
 });

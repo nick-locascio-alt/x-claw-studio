@@ -1,19 +1,25 @@
 import type { Metadata } from "next";
-import { Fraunces, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { JetBrains_Mono, Orbitron, Share_Tech_Mono } from "next/font/google";
 import "./globals.css";
 
-const display = Fraunces({
+const heading = Orbitron({
   subsets: ["latin"],
-  variable: "--font-display"
+  variable: "--font-heading"
 });
 
-const body = IBM_Plex_Sans({
+const label = Share_Tech_Mono({
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: "400",
+  variable: "--font-label"
+});
+
+const body = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: "400",
   variable: "--font-body"
 });
 
-const mono = IBM_Plex_Mono({
+const mono = JetBrains_Mono({
   subsets: ["latin"],
   weight: ["400", "500"],
   variable: "--font-mono"
@@ -28,7 +34,7 @@ export default function RootLayout({
   children
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
+    <html lang="en" className={`${heading.variable} ${label.variable} ${body.variable} ${mono.variable}`}>
       <body>{children}</body>
     </html>
   );

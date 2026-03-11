@@ -1,17 +1,77 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { ChromaClient, type Metadata } from "chromadb";
 import { GoogleGenAI } from "@google/genai";
 import { ANALYSIS_FACET_NAMES, type AnalysisFacetName } from "@/src/lib/analysis-schema";
 import { getGeminiApiKey, loadEnv } from "@/src/lib/env";
 import { readAllUsageAnalyses } from "@/src/server/analysis-store";
 import { getDashboardData } from "@/src/server/data";
-import type { ExtractedTweet, UsageAnalysis } from "@/src/lib/types";
+import type { ExtractedTweet, MediaAssetRecord, TweetUsageRecord, UsageAnalysis } from "@/src/lib/types";
 
 loadEnv();
 const chromaUrl = process.env.CHROMA_URL || "http://localhost:8000";
 const chromaCollectionName = process.env.CHROMA_COLLECTION || "twitter_trend_facets";
 const embeddingModel = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
+const chromaEmbeddingMaxRetries = Number(process.env.GEMINI_EMBEDDING_MAX_RETRIES || 4);
+const chromaEmbeddingRetryBaseDelayMs = Number(process.env.GEMINI_EMBEDDING_RETRY_BASE_DELAY_MS || 5000);
+const chromaEmbeddingRetryMaxDelayMs = Number(process.env.GEMINI_EMBEDDING_RETRY_MAX_DELAY_MS || 45000);
 const hybridVectorWeight = Number(process.env.HYBRID_SEARCH_VECTOR_WEIGHT || 0.65);
 const hybridLexicalWeight = Number(process.env.HYBRID_SEARCH_LEXICAL_WEIGHT || 0.35);
+let hasWarnedChromaEmbeddingMismatch = false;
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function isChromaDefaultEmbeddingMismatch(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  return (
+    message.includes("DefaultEmbeddingFunction") ||
+    message.includes("@chroma-core/default-embed") ||
+    message.includes("default-embed embedding function")
+  );
+}
+
+function isRetryableGeminiError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  return (
+    message.includes('"status":"INTERNAL"') ||
+    message.includes('"code":500') ||
+    message.includes("500") ||
+    message.includes("Internal error encountered") ||
+    message.includes('"status":"UNAVAILABLE"') ||
+    message.includes('"code":503') ||
+    message.includes("503") ||
+    message.includes("high demand") ||
+    message.includes("rate limit") ||
+    message.includes("RESOURCE_EXHAUSTED") ||
+    message.includes("429") ||
+    message.includes("temporarily unavailable")
+  );
+}
+
+function computeRetryDelayMs(attempt: number): number {
+  const backoff = Math.min(
+    chromaEmbeddingRetryMaxDelayMs,
+    chromaEmbeddingRetryBaseDelayMs * Math.max(1, 2 ** Math.max(0, attempt - 1))
+  );
+  const jitter = Math.round(backoff * (0.2 + Math.random() * 0.3));
+  return Math.min(chromaEmbeddingRetryMaxDelayMs, backoff + jitter);
+}
+
+function warnChromaIndexingSkipped(error: unknown): void {
+  if (hasWarnedChromaEmbeddingMismatch) {
+    return;
+  }
+
+  hasWarnedChromaEmbeddingMismatch = true;
+  console.warn(
+    `Skipping Chroma indexing because the collection expects Chroma's default embedding package, which is not installed. Scraping and analysis will continue, but vector indexing/search will be unavailable until the collection is recreated or @chroma-core/default-embed is installed. ${getErrorMessage(error)}`
+  );
+}
 
 function facetValueToText(value: UsageAnalysis[AnalysisFacetName]): string | null {
   if (Array.isArray(value)) {
@@ -27,14 +87,30 @@ function facetValueToText(value: UsageAnalysis[AnalysisFacetName]): string | nul
 
 async function embedTexts(texts: string[]): Promise<number[][]> {
   const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
-  const response = await ai.models.embedContent({
-    model: embeddingModel,
-    contents: texts
-  });
+  for (let attempt = 1; attempt <= chromaEmbeddingMaxRetries + 1; attempt += 1) {
+    try {
+      const response = await ai.models.embedContent({
+        model: embeddingModel,
+        contents: texts
+      });
 
-  return (response.embeddings ?? [])
-    .map((item) => item.values ?? [])
-    .filter((embedding): embedding is number[] => embedding.length > 0);
+      return (response.embeddings ?? [])
+        .map((item) => item.values ?? [])
+        .filter((embedding): embedding is number[] => embedding.length > 0);
+    } catch (error) {
+      if (!isRetryableGeminiError(error) || attempt > chromaEmbeddingMaxRetries) {
+        throw error;
+      }
+
+      const retryDelayMs = computeRetryDelayMs(attempt);
+      console.warn(
+        `Gemini embedding transient failure for Chroma indexing on attempt ${attempt}/${chromaEmbeddingMaxRetries + 1}. Retrying in ${retryDelayMs}ms. ${getErrorMessage(error)}`
+      );
+      await delay(retryDelayMs);
+    }
+  }
+
+  return [];
 }
 
 async function getCollection() {
@@ -45,6 +121,26 @@ async function getCollection() {
   });
 }
 
+async function upsertWithExplicitEmbeddings(input: {
+  ids: string[];
+  documents: string[];
+  metadatas: Metadata[];
+  embeddings: number[][];
+}): Promise<{ indexedCount: number }> {
+  try {
+    const collection = await getCollection();
+    await collection.upsert(input);
+    return { indexedCount: input.ids.length };
+  } catch (error) {
+    if (isChromaDefaultEmbeddingMismatch(error)) {
+      warnChromaIndexingSkipped(error);
+      return { indexedCount: 0 };
+    }
+
+    throw error;
+  }
+}
+
 export interface HybridSearchRow {
   id: string;
   document: string;
@@ -52,6 +148,7 @@ export interface HybridSearchRow {
   media: {
     mediaAssetId: string | null;
     mediaLocalFilePath: string | null;
+    mediaPlayableFilePath: string | null;
     sourceUrl: string | null;
     previewUrl: string | null;
     posterUrl: string | null;
@@ -72,6 +169,11 @@ export interface HybridSearchResult {
   results: HybridSearchRow[];
 }
 
+interface FacetSearchContext {
+  tweetText?: string | null;
+  authorUsername?: string | null;
+}
+
 function normalizeScore(value: number, maxValue: number): number {
   if (!Number.isFinite(value) || maxValue <= 0) {
     return 0;
@@ -88,13 +190,91 @@ function tokenize(text: string): string[] {
     .filter((token) => token.length > 1);
 }
 
-function buildFacetDocument(analysis: UsageAnalysis, facetName: AnalysisFacetName): string | null {
+function buildFacetDocument(
+  analysis: UsageAnalysis,
+  facetName: AnalysisFacetName,
+  context?: FacetSearchContext
+): string | null {
   const facetText = facetValueToText(analysis[facetName]);
   if (!facetText) {
     return null;
   }
 
-  return [`facet_name: ${facetName}`, `facet_value: ${facetText}`, `media_kind: ${analysis.mediaKind}`].join("\n");
+  const lines = [
+    `facet_name: ${facetName}`,
+    `facet_value: ${facetText}`,
+    `media_kind: ${analysis.mediaKind}`
+  ];
+
+  if (context?.tweetText) {
+    lines.push(`tweet_text: ${context.tweetText}`);
+  }
+
+  if (context?.authorUsername) {
+    lines.push(`author_username: ${context.authorUsername}`);
+  }
+
+  if (analysis.caption_brief) {
+    lines.push(`caption_brief: ${analysis.caption_brief}`);
+  }
+
+  if (analysis.scene_description) {
+    lines.push(`scene_description: ${analysis.scene_description}`);
+  }
+
+  if (analysis.ocr_text) {
+    lines.push(`ocr_text: ${analysis.ocr_text}`);
+  }
+
+  if (analysis.setting_context) {
+    lines.push(`setting_context: ${analysis.setting_context}`);
+  }
+
+  if (analysis.action_or_event) {
+    lines.push(`action_or_event: ${analysis.action_or_event}`);
+  }
+
+  if (analysis.primary_subjects.length > 0) {
+    lines.push(`primary_subjects: ${analysis.primary_subjects.join(", ")}`);
+  }
+
+  if (analysis.secondary_subjects.length > 0) {
+    lines.push(`secondary_subjects: ${analysis.secondary_subjects.join(", ")}`);
+  }
+
+  if (analysis.visible_objects.length > 0) {
+    lines.push(`visible_objects: ${analysis.visible_objects.join(", ")}`);
+  }
+
+  if (analysis.reference_entity) {
+    lines.push(`reference_entity: ${analysis.reference_entity}`);
+  }
+
+  if (analysis.reference_source) {
+    lines.push(`reference_source: ${analysis.reference_source}`);
+  }
+
+  if (analysis.reference_plot_context) {
+    lines.push(`reference_plot_context: ${analysis.reference_plot_context}`);
+  }
+
+  if (analysis.analogy_target) {
+    lines.push(`analogy_target: ${analysis.analogy_target}`);
+  }
+
+  if (analysis.analogy_scope) {
+    lines.push(`analogy_scope: ${analysis.analogy_scope}`);
+  }
+
+  if (analysis.brand_signals.length > 0) {
+    lines.push(`brand_signals: ${analysis.brand_signals.join(", ")}`);
+  }
+
+  if (analysis.search_keywords.length > 0) {
+    lines.push(`search_keywords: ${analysis.search_keywords.join(", ")}`);
+  }
+
+  return lines.join("\n");
 }
 
 function buildFacetMetadata(analysis: UsageAnalysis, facetName: AnalysisFacetName): Record<string, string | number | boolean | null> {
@@ -126,7 +306,11 @@ function buildLexicalRows(params: {
         continue;
       }
 
-      const document = buildFacetDocument(analysis, facet);
+      const usage = usageMap.get(analysis.usageId);
+      const document = buildFacetDocument(analysis, facet, {
+        tweetText: usage?.tweet.text,
+        authorUsername: usage?.tweet.authorUsername
+      });
       if (!document) {
         continue;
       }
@@ -183,7 +367,7 @@ function buildLexicalRows(params: {
 
   const maxScore = scored[0]?.score ?? 0;
 
-  return scored.slice(0, params.limit * 3).map(({ doc, score }) => ({
+  return scored.slice(0, Math.max(params.limit * 4, 40)).map(({ doc, score }) => ({
     id: doc.id,
     document: doc.document,
     metadata: doc.metadata,
@@ -198,6 +382,7 @@ function buildLexicalRows(params: {
       return {
         mediaAssetId: usage.mediaAssetId,
         mediaLocalFilePath: usage.mediaLocalFilePath,
+        mediaPlayableFilePath: usage.mediaPlayableFilePath,
         sourceUrl: media?.sourceUrl ?? null,
         previewUrl: media?.previewUrl ?? null,
         posterUrl: media?.posterUrl ?? null,
@@ -230,13 +415,10 @@ export async function indexUsageAnalysisInChroma(
 
     ids.push(`${analysis.usageId}::${facetName}`);
     docs.push(
-      [
-        `facet_name: ${facetName}`,
-        `facet_value: ${facetText}`,
-        `tweet_text: ${tweet.text ?? ""}`,
-        `author_username: ${tweet.authorUsername ?? ""}`,
-        `media_kind: ${analysis.mediaKind}`
-      ].join("\n")
+      buildFacetDocument(analysis, facetName, {
+        tweetText: tweet.text,
+        authorUsername: tweet.authorUsername
+      }) ?? ""
     );
     metadatas.push({
       usage_id: analysis.usageId,
@@ -251,16 +433,76 @@ export async function indexUsageAnalysisInChroma(
     return { indexedCount: 0 };
   }
 
-  const embeddings = await embedTexts(docs);
-  const collection = await getCollection();
-  await collection.upsert({
-    ids,
-    documents: docs,
-    metadatas,
-    embeddings
-  });
+  try {
+    const embeddings = await embedTexts(docs);
+    return upsertWithExplicitEmbeddings({
+      ids,
+      documents: docs,
+      metadatas,
+      embeddings
+    });
+  } catch (error) {
+    console.warn(`Skipping Chroma indexing for usage ${analysis.usageId}. ${getErrorMessage(error)}`);
+    return { indexedCount: 0 };
+  }
+}
 
-  return { indexedCount: docs.length };
+export async function indexAssetVideoAnalysisInChroma(
+  asset: MediaAssetRecord,
+  representativeUsage: TweetUsageRecord | null,
+  analysis: UsageAnalysis
+): Promise<{ indexedCount: number }> {
+  const docs: string[] = [];
+  const ids: string[] = [];
+  const metadatas: Metadata[] = [];
+
+  for (const facetName of ANALYSIS_FACET_NAMES) {
+    const rawValue = analysis[facetName];
+    const facetText = facetValueToText(rawValue);
+    if (!facetText) {
+      continue;
+    }
+
+    ids.push(`${asset.assetId}::video::${facetName}`);
+    docs.push(
+      [
+        buildFacetDocument(analysis, facetName, {
+          tweetText: representativeUsage?.tweet.text ?? null,
+          authorUsername: representativeUsage?.tweet.authorUsername ?? null
+        }),
+        `asset_id: ${asset.assetId}`,
+        "analysis_scope: asset_video"
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join("\n")
+    );
+    metadatas.push({
+      usage_id: representativeUsage?.usageId ?? "",
+      tweet_id: representativeUsage?.tweet.tweetId ?? "unknown",
+      asset_id: asset.assetId,
+      author_username: representativeUsage?.tweet.authorUsername ?? "unknown",
+      facet_name: facetName,
+      media_kind: analysis.mediaKind,
+      analysis_scope: "asset_video"
+    });
+  }
+
+  if (docs.length === 0) {
+    return { indexedCount: 0 };
+  }
+
+  try {
+    const embeddings = await embedTexts(docs);
+    return upsertWithExplicitEmbeddings({
+      ids,
+      documents: docs,
+      metadatas,
+      embeddings
+    });
+  } catch (error) {
+    console.warn(`Skipping Chroma indexing for asset video ${asset.assetId}. ${getErrorMessage(error)}`);
+    return { indexedCount: 0 };
+  }
 }
 
 export async function searchFacetIndex(params: {
@@ -268,7 +510,7 @@ export async function searchFacetIndex(params: {
   facetName?: AnalysisFacetName;
   limit?: number;
 }): Promise<HybridSearchResult> {
-  const limit = params.limit ?? 8;
+  const limit = params.limit ?? 20;
   const usageMap = new Map(getDashboardData().tweetUsages.map((usage) => [usage.usageId, usage]));
   const lexicalRows = buildLexicalRows({
     query: params.query,
@@ -282,7 +524,7 @@ export async function searchFacetIndex(params: {
     const queryEmbeddings = await embedTexts([params.query]);
     const result = await collection.query({
       queryEmbeddings,
-      nResults: limit * 3,
+      nResults: Math.max(limit * 4, 40),
       where: params.facetName ? { facet_name: params.facetName } : undefined,
       include: ["documents", "metadatas", "distances"]
     });
@@ -317,6 +559,7 @@ export async function searchFacetIndex(params: {
             return {
               mediaAssetId: usage.mediaAssetId,
               mediaLocalFilePath: usage.mediaLocalFilePath,
+              mediaPlayableFilePath: usage.mediaPlayableFilePath,
               sourceUrl: media?.sourceUrl ?? null,
               previewUrl: media?.previewUrl ?? null,
               posterUrl: media?.posterUrl ?? null,

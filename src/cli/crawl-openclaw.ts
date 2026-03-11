@@ -2,25 +2,36 @@ import fs from "node:fs";
 import path from "node:path";
 import "@/src/lib/env";
 import { ensureDir, writeJson } from "@/src/lib/fs";
+import { sleep } from "@/src/lib/sleep";
 import {
   createScrollHumanizer,
   type ScrollHumanizerDriver
 } from "@/src/lib/scroll-humanizer";
 import {
   chooseAttachedXTab,
+  openclawFocus,
+  openclawNavigate,
   openclawRefresh,
-  openclawWait,
   resolveOpenClawTabIndex
 } from "@/src/server/openclaw-browser";
+import { buildUsageId } from "@/src/lib/usage-id";
+import { normalizeXStatusUrl } from "@/src/lib/x-status-url";
 import { analyzeMissingUsages } from "@/src/server/analyze-missing";
 import { getDashboardData } from "@/src/server/data";
-import { buildMediaAssetIndex, buildMediaAssetSummaries } from "@/src/server/media-assets";
+import {
+  buildMediaAssetIndex,
+  buildMediaAssetSummaries,
+  promoteStarredAssetVideo,
+  setMediaAssetStarred
+} from "@/src/server/media-assets";
 import {
   captureVisibleTweets,
   capturePageSnapshot,
   collectOpenClawRequestMedia,
   measureVisibleTweetWindow,
   persistTweetPosterMedia,
+  readScrollPosition,
+  wheelBurstTab,
   wheelTickTab
 } from "@/src/server/openclaw-capture";
 import type { CrawlManifest } from "@/src/lib/types";
@@ -35,7 +46,7 @@ const mediaDir = path.join(rawDir, "media");
 ensureDir(htmlDir);
 ensureDir(mediaDir);
 
-const maxScrolls = Number(process.env.MAX_SCROLLS || 20);
+const maxScrolls = Number(process.env.MAX_SCROLLS || 100);
 const scrollPauseMs = Number(process.env.SCROLL_PAUSE_MS || 5000);
 const scrollStepMinPx = Number(process.env.SCROLL_STEP_MIN_PX || 260);
 const scrollStepMaxPx = Number(process.env.SCROLL_STEP_MAX_PX || 720);
@@ -46,6 +57,10 @@ const scrollStepPauseMaxMs = Number(process.env.SCROLL_STEP_PAUSE_MAX_MS || 1400
 const downloadVideoPosters = process.env.DOWNLOAD_VIDEO_POSTERS !== "0";
 const downloadImages = process.env.DOWNLOAD_IMAGES !== "0";
 const autoAnalyzeAfterCrawl = process.env.AUTO_ANALYZE_AFTER_CRAWL !== "0";
+const keepScrollPosition = process.env.OPENCLAW_KEEP_SCROLL_POSITION === "1";
+const openclawStartUrl = normalizeXStatusUrl(process.env.OPENCLAW_START_URL ?? null);
+const tweetPageMaxScrolls = Number(process.env.OPENCLAW_TWEET_PAGE_MAX_SCROLLS || 5);
+const effectiveMaxScrolls = openclawStartUrl ? Math.max(1, Math.min(maxScrolls, tweetPageMaxScrolls)) : maxScrolls;
 
 const humanizer = createScrollHumanizer({
   capturePauseMs: scrollPauseMs,
@@ -64,11 +79,26 @@ function formatValue(value: string | null | undefined): string {
   return value?.trim() ? value : "unknown";
 }
 
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 1000) {
+    return `${Math.max(0, Math.round(ms))}ms`;
+  }
+
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
 const manifest: CrawlManifest = {
   runId: `openclaw-${runId}`,
   startedAt: new Date().toISOString(),
   baseUrl: "attached-tab",
-  maxScrolls,
+  maxScrolls: effectiveMaxScrolls,
   downloadImages,
   downloadVideoPosters,
   downloadVideos: false,
@@ -77,12 +107,14 @@ const manifest: CrawlManifest = {
 };
 
 async function run(): Promise<void> {
+  const runStartedAt = Date.now();
   const tabIndex = resolveOpenClawTabIndex();
   const tab = await chooseAttachedXTab(tabIndex);
   const driver: ScrollHumanizerDriver = {
     refresh: () => openclawRefresh(tab.targetId),
-    wait: (ms: number) => openclawWait(tab.targetId, ms),
-    wheelTick: ({ deltaY }: { deltaY: number }) => wheelTickTab(tab.targetId, deltaY)
+    wait: (ms: number) => sleep(ms),
+    wheelTick: ({ deltaY }: { deltaY: number }) => wheelTickTab(tab.targetId, deltaY),
+    wheelBurst: (steps) => wheelBurstTab(tab.targetId, steps)
   };
 
   console.log(
@@ -94,7 +126,20 @@ async function run(): Promise<void> {
       `url=${formatValue(tab.url)}`
     ].join(" ")
   );
-  await humanizer.refreshAtStart(driver);
+  await openclawFocus(tab.targetId);
+  console.log(`Focused OpenClaw tab targetId=${tab.targetId}`);
+  if (openclawStartUrl) {
+    console.log(`Navigating selected tab to requested tweet URL: ${openclawStartUrl}`);
+    await openclawNavigate(tab.targetId, openclawStartUrl);
+    await sleep(2500);
+  } else if (!keepScrollPosition) {
+    await humanizer.refreshAtStart(driver);
+  }
+  if (keepScrollPosition) {
+    console.log("Keeping current scroll position for this manual run; skipping initial refresh.");
+  } else if (openclawStartUrl) {
+    console.log("Using requested tweet page as the crawl starting point.");
+  }
   const initialPage = await capturePageSnapshot(tab.targetId);
   console.log(
     [
@@ -115,7 +160,7 @@ async function run(): Promise<void> {
     );
   }
 
-  for (let i = 0; i < maxScrolls; i += 1) {
+  for (let i = 0; i < effectiveMaxScrolls; i += 1) {
     await humanizer.pauseBeforeCapture(driver);
     const tweets = await captureVisibleTweets(tab.targetId, `openclaw-scroll-${i}`, {
       maxTweets: 10
@@ -157,33 +202,98 @@ async function run(): Promise<void> {
       downloadVideoPosters
     });
     console.log(
-      `scroll ${i + 1}/${maxScrolls}: domTweets=${windowStats.totalTweets} visibleWindow=${windowStats.visibleTweets} avgTweetPx=${Math.round(windowStats.averageTweetHeight)} captured=${tweets.length} unique=${manifest.capturedTweets.length} duplicates=${duplicateTweetCount} media=${manifest.interceptedMedia.length}`
+      `scroll ${i + 1}/${effectiveMaxScrolls}: domTweets=${windowStats.totalTweets} visibleWindow=${windowStats.visibleTweets} avgTweetPx=${Math.round(windowStats.averageTweetHeight)} captured=${tweets.length} unique=${manifest.capturedTweets.length} duplicates=${duplicateTweetCount} media=${manifest.interceptedMedia.length}`
+    );
+    const scrollBefore = await readScrollPosition(tab.targetId);
+    console.log(
+      `scroll ${i + 1}/${effectiveMaxScrolls}: advancing fromY=${Math.round(scrollBefore)} minPx=${windowStats.safeScrollMinPx} maxPx=${windowStats.safeScrollMaxPx}`
     );
     await humanizer.scroll(driver, {
       minPx: windowStats.safeScrollMinPx,
       maxPx: windowStats.safeScrollMaxPx
     });
+    const scrollAfter = await readScrollPosition(tab.targetId);
+    console.log(`scroll ${i + 1}/${effectiveMaxScrolls}: advanced toY=${Math.round(scrollAfter)}`);
   }
 
+  console.log(
+    [
+      "Capture summary:",
+      `uniqueTweets=${manifest.capturedTweets.length}`,
+      `interceptedMedia=${manifest.interceptedMedia.length}`,
+      `elapsed=${formatDuration(Date.now() - runStartedAt)}`
+    ].join(" ")
+  );
+  console.log(`Writing manifest -> ${path.relative(projectRoot, manifestPath)}`);
   manifest.completedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
+  console.log(
+    `Manifest written. tweets=${manifest.capturedTweets.length} media=${manifest.interceptedMedia.length} elapsed=${formatDuration(Date.now() - runStartedAt)}`
+  );
+
+  console.log("Loading dashboard data for asset rebuild...");
   const data = getDashboardData();
+  console.log(
+    `Dashboard data loaded. manifests=${data.manifests.length} usages=${data.tweetUsages.length} elapsed=${formatDuration(Date.now() - runStartedAt)}`
+  );
+
+  const assetBuildStartedAt = Date.now();
+  console.log("Rebuilding media asset index...");
   const assetIndex = await buildMediaAssetIndex({
     usages: data.tweetUsages,
     manifests: data.manifests
   });
+  console.log(
+    `Media asset index rebuilt. assets=${assetIndex.assets.length} duration=${formatDuration(Date.now() - assetBuildStartedAt)} elapsed=${formatDuration(Date.now() - runStartedAt)}`
+  );
+
+  const summaryBuildStartedAt = Date.now();
+  console.log("Rebuilding media asset summaries...");
   buildMediaAssetSummaries({
     usages: data.tweetUsages,
     assetIndex
   });
+  console.log(
+    `Media asset summaries rebuilt. duration=${formatDuration(Date.now() - summaryBuildStartedAt)} elapsed=${formatDuration(Date.now() - runStartedAt)}`
+  );
   if (autoAnalyzeAfterCrawl) {
-    console.log("Auto-analyzing missing usages after crawl...");
+    console.log(
+      `Auto-analyzing missing usages after crawl... elapsed=${formatDuration(Date.now() - runStartedAt)}`
+    );
     const result = await analyzeMissingUsages();
     console.log(
-      `Auto-analysis complete: completed=${result.completed} skipped=${result.skipped} failed=${result.failed} totalMissing=${result.totalMissing}`
+      `Auto-analysis complete: completed=${result.completed} skipped=${result.skipped} failed=${result.failed} totalMissing=${result.totalMissing} elapsed=${formatDuration(Date.now() - runStartedAt)}`
     );
+  } else {
+    console.log("Auto-analysis skipped because AUTO_ANALYZE_AFTER_CRAWL=0");
   }
-  console.log(`Wrote manifest -> ${path.relative(projectRoot, manifestPath)}`);
+
+  if (openclawStartUrl) {
+    const topTweet =
+      manifest.capturedTweets.find((tweet) => normalizeXStatusUrl(tweet.tweetUrl) === openclawStartUrl) ??
+      manifest.capturedTweets[0] ??
+      null;
+
+    if (topTweet) {
+      for (let mediaIndex = 0; mediaIndex < topTweet.media.length; mediaIndex += 1) {
+        const usageId = buildUsageId(topTweet, mediaIndex);
+        const assetId = assetIndex.usageToAssetId[usageId];
+        if (!assetId) {
+          continue;
+        }
+
+        if (setMediaAssetStarred(assetId, true)) {
+          await promoteStarredAssetVideo(assetId);
+          console.log(`Auto-starred top tweet asset ${assetId} for ${usageId}`);
+        }
+      }
+    } else {
+      console.warn(`No top tweet found to auto-star for ${openclawStartUrl}`);
+    }
+  }
+  console.log(
+    `crawl_openclaw complete. manifest=${path.relative(projectRoot, manifestPath)} totalElapsed=${formatDuration(Date.now() - runStartedAt)}`
+  );
 }
 
 run().catch((error: Error) => {

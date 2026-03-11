@@ -4,6 +4,10 @@ import { usageAnalysisSchema, usageAnalysisJsonSchema } from "@/src/lib/analysis
 import { getGeminiApiKey, loadEnv } from "@/src/lib/env";
 import { buildUsageId } from "@/src/lib/usage-id";
 import { loadMediaAsBase64 } from "@/src/server/media-loader";
+import {
+  buildTweetMediaAnalysisPrompt,
+  type GeminiAnalysisPromptVariant
+} from "@/src/server/gemini-analysis-prompt";
 import type { ExtractedTweet, UsageAnalysis } from "@/src/lib/types";
 
 loadEnv();
@@ -24,6 +28,10 @@ function isRetryableGeminiError(error: unknown): boolean {
   const message = getErrorMessage(error);
 
   return (
+    message.includes('"status":"INTERNAL"') ||
+    message.includes('"code":500') ||
+    message.includes("500") ||
+    message.includes("Internal error encountered") ||
     message.includes('"status":"UNAVAILABLE"') ||
     message.includes('"code":503') ||
     message.includes("503") ||
@@ -44,82 +52,40 @@ function computeRetryDelayMs(attempt: number): number {
   return Math.min(analysisRetryMaxDelayMs, backoff + jitter);
 }
 
-function buildPrompt(tweet: ExtractedTweet, mediaIndex: number): string {
-  const media = tweet.media[mediaIndex];
-
-  return [
-    "Analyze this single X/Twitter tweet media usage.",
-    "Return only JSON matching the provided schema.",
-    "Use concise but information-dense values.",
-    "All field names must remain exactly as provided.",
-    "If a field is uncertain, provide the best grounded inference and explain uncertainty in confidence_notes.",
-    "",
-    `usageId: ${buildUsageId(tweet, mediaIndex)}`,
-    `tweetId: ${tweet.tweetId ?? "unknown"}`,
-    `author_username: ${tweet.authorUsername ?? "unknown"}`,
-    `author_display_name: ${tweet.authorDisplayName ?? "unknown"}`,
-    `tweet_url: ${tweet.tweetUrl ?? "unknown"}`,
-    `created_at: ${tweet.createdAt ?? "unknown"}`,
-    `tweet_text: ${tweet.text ?? ""}`,
-    `likes: ${tweet.metrics.likes ?? "unknown"}`,
-    `reposts: ${tweet.metrics.reposts ?? "unknown"}`,
-    `replies: ${tweet.metrics.replies ?? "unknown"}`,
-    `views: ${tweet.metrics.views ?? "unknown"}`,
-    `media_kind: ${media.mediaKind}`,
-    `media_source_url: ${media.sourceUrl ?? "unknown"}`,
-    `media_poster_url: ${media.posterUrl ?? "unknown"}`,
-    "",
-    "Facet guidance:",
-    "- has_celebrity: true if the media clearly contains a widely recognizable public figure or celebrity; false otherwise.",
-    "- has_human_face: true if one or more human faces are visibly present; false otherwise.",
-    "- features_female: true if a prominent depicted person appears female-presenting; false otherwise. This may coexist with features_male in group shots.",
-    "- features_male: true if a prominent depicted person appears male-presenting; false otherwise. This may coexist with features_female in group shots.",
-    "- has_screenshot_ui: true if the media is mainly a screenshot of software, a webpage, a terminal, a dashboard, or app UI; false otherwise.",
-    "- has_text_overlay: true if there is prominent text rendered inside the media itself, beyond tiny incidental text; false otherwise.",
-    "- has_chart_or_graph: true if a chart, graph, market candle chart, axis plot, or diagram is a major visual element; false otherwise.",
-    "- has_logo_or_watermark: true if a logo, brand mark, or watermark is visibly embedded in the media; false otherwise.",
-    "- caption_brief: literal one-sentence caption of the media.",
-    "- scene_description: fuller visual description.",
-    "- primary_emotion: the single dominant emotion the media conveys most strongly, like anxiety, awe, excitement, humor, confidence, dread, curiosity, or calm.",
-    "- conveys: what social/emotional message the post communicates.",
-    "- user_intent: why the author likely chose this media here.",
-    "- rhetorical_role: reaction, evidence, explainer, meme, flex, announcement, fear signal, etc.",
-    "- text_media_relationship: how the tweet text and media reinforce, contrast, or reframe each other.",
-    "- metaphor: implied analogy or symbolic pairing between media and text.",
-    "- trend_signal: why this media could travel or get reused.",
-    "- reuse_pattern: how other posters might reuse the same asset archetype.",
-    "- search_keywords: short retrieval-oriented keywords, not full sentences."
-  ].join("\n");
+interface AnalyzeTweetMediaUsageOptions {
+  mediaIndex?: number;
+  mediaSourceOverride?: string;
+  promptVariant?: GeminiAnalysisPromptVariant;
 }
 
-export async function analyzeTweetMediaUsage(
+export async function analyzeTweetMediaUsageWithOptions(
   tweet: ExtractedTweet,
-  mediaIndex = 0
+  options: AnalyzeTweetMediaUsageOptions = {}
 ): Promise<UsageAnalysis> {
-  const apiKey = getGeminiApiKey();
+  const mediaIndex = options.mediaIndex ?? 0;
+  const promptVariant = options.promptVariant ?? "cultural_audit";
   const media = tweet.media[mediaIndex];
 
   if (!media) {
     throw new Error(`Tweet ${tweet.tweetId ?? tweet.sourceName} has no media at index ${mediaIndex}`);
   }
 
-  const mediaSource = media.posterUrl || media.previewUrl || media.sourceUrl;
+  const mediaSource = options.mediaSourceOverride || media.posterUrl || media.previewUrl || media.sourceUrl;
   if (!mediaSource || mediaSource.startsWith("blob:")) {
     throw new Error("Media source is not analyzable yet; need poster URL or downloadable media URL");
   }
 
+  const apiKey = getGeminiApiKey();
   const ai = new GoogleGenAI({ apiKey });
   const mediaPart = await loadMediaAsBase64(mediaSource);
+  const prompt = buildTweetMediaAnalysisPrompt(tweet, mediaIndex, promptVariant);
   let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
 
   for (let attempt = 1; attempt <= analysisMaxRetries + 1; attempt += 1) {
     try {
       response = await ai.models.generateContent({
         model: analysisModel,
-        contents: [
-          { text: buildPrompt(tweet, mediaIndex) },
-          createPartFromBase64(mediaPart.base64, mediaPart.mimeType)
-        ],
+        contents: [{ text: prompt }, createPartFromBase64(mediaPart.base64, mediaPart.mimeType)],
         config: {
           responseMimeType: "application/json",
           responseSchema: usageAnalysisJsonSchema
@@ -157,4 +123,14 @@ export async function analyzeTweetMediaUsage(
     mediaKind: media.mediaKind,
     status: "complete"
   };
+}
+
+export async function analyzeTweetMediaUsage(
+  tweet: ExtractedTweet,
+  mediaIndex = 0
+): Promise<UsageAnalysis> {
+  return analyzeTweetMediaUsageWithOptions(tweet, {
+    mediaIndex,
+    promptVariant: "cultural_audit"
+  });
 }

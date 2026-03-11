@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import type { TweetUsageRecord } from "@/src/lib/types";
+import { useDeferredValue, useMemo, useState } from "react";
 import { AnalyzeUsageButton } from "@/src/components/analyze-usage-button";
 import { AssetStarButton } from "@/src/components/asset-star-button";
+import { MediaPreview } from "@/src/components/media-preview";
 import { resolveMediaDisplayUrl } from "@/src/lib/media-display";
+import type { TweetUsageRecord } from "@/src/lib/types";
 
 function formatDate(value: string | null | undefined): string {
   if (!value) {
@@ -22,25 +23,123 @@ function renderField(value: string | null): string {
   return value ?? "Pending";
 }
 
-export function UsageQueue(props: { usages: TweetUsageRecord[] }) {
-  const [matchFilter, setMatchFilter] = useState<"all" | "phash" | "starred">("all");
+function getUsageTimestampMs(usage: TweetUsageRecord): number {
+  const timestamp = usage.tweet.createdAt ?? usage.tweet.extraction.extractedAt ?? null;
+  const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareUsages(
+  left: TweetUsageRecord,
+  right: TweetUsageRecord,
+  sortOrder: "newest" | "duplicates" | "hotness"
+): number {
+  if (sortOrder === "duplicates" && left.duplicateGroupUsageCount !== right.duplicateGroupUsageCount) {
+    return right.duplicateGroupUsageCount - left.duplicateGroupUsageCount;
+  }
+
+  if (sortOrder === "hotness" && left.hotnessScore !== right.hotnessScore) {
+    return right.hotnessScore - left.hotnessScore;
+  }
+
+  if (getUsageTimestampMs(left) !== getUsageTimestampMs(right)) {
+    return getUsageTimestampMs(right) - getUsageTimestampMs(left);
+  }
+
+  if (left.duplicateGroupUsageCount !== right.duplicateGroupUsageCount) {
+    return right.duplicateGroupUsageCount - left.duplicateGroupUsageCount;
+  }
+
+  if (left.hotnessScore !== right.hotnessScore) {
+    return right.hotnessScore - left.hotnessScore;
+  }
+
+  return left.usageId.localeCompare(right.usageId);
+}
+
+export function UsageQueue(props: {
+  usages: TweetUsageRecord[];
+  initialMatchFilter?: "all" | "matched" | "phash" | "starred" | "starred_or_duplicates";
+  sectionLabel?: string;
+  sectionTitle?: string;
+  compact?: boolean;
+  initialHideDuplicateAssets?: boolean;
+}) {
+  const [matchFilter, setMatchFilter] = useState<"all" | "matched" | "phash" | "starred" | "starred_or_duplicates">(props.initialMatchFilter ?? "all");
   const [viewMode, setViewMode] = useState<"summary" | "detail">("detail");
-  const [columnsPerRow, setColumnsPerRow] = useState(4);
+  const [columnsPerRow, setColumnsPerRow] = useState(props.compact ? 3 : 3);
   const [expandedUsageIds, setExpandedUsageIds] = useState<string[]>([]);
+  const [hideDuplicateAssets, setHideDuplicateAssets] = useState(props.initialHideDuplicateAssets ?? false);
+  const [query, setQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<"newest" | "duplicates" | "hotness">("newest");
+  const deferredQuery = useDeferredValue(query);
+
+  const counts = useMemo(
+    () => ({
+      all: props.usages.length,
+      matched: props.usages.filter((usage) => usage.mediaAssetUsageCount > 1 || usage.phashMatchCount > 0).length,
+      phash: props.usages.filter((usage) => usage.phashMatchCount > 0).length,
+      starred: props.usages.filter((usage) => usage.mediaAssetStarred).length,
+      starred_or_duplicates: props.usages.filter((usage) => usage.mediaAssetStarred || usage.mediaAssetUsageCount > 1 || usage.phashMatchCount > 0).length
+    }),
+    [props.usages]
+  );
 
   const visibleUsages = useMemo(() => {
-    return props.usages.filter((usage) => {
-      if (matchFilter === "phash") {
-        return usage.phashMatchCount > 0;
+    const normalizedQuery = deferredQuery.trim().toLowerCase();
+    const filtered = props.usages.filter((usage) => {
+      if (matchFilter === "matched") {
+        if (!(usage.mediaAssetUsageCount > 1 || usage.phashMatchCount > 0)) {
+          return false;
+        }
       }
 
-      if (matchFilter === "starred") {
-        return usage.mediaAssetStarred;
+      if (matchFilter === "phash" && usage.phashMatchCount === 0) {
+        return false;
       }
 
-      return true;
+      if (matchFilter === "starred" && !usage.mediaAssetStarred) {
+        return false;
+      }
+
+      if (matchFilter === "starred_or_duplicates" && !(usage.mediaAssetStarred || usage.mediaAssetUsageCount > 1 || usage.phashMatchCount > 0)) {
+        return false;
+      }
+
+      if (!normalizedQuery) {
+        return true;
+      }
+
+      const haystack = [
+        usage.tweet.authorUsername,
+        usage.tweet.text,
+        usage.analysis.status,
+        usage.analysis.caption_brief,
+        usage.analysis.scene_description
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedQuery);
     });
-  }, [matchFilter, props.usages]);
+
+    const sorted = [...filtered].sort((left, right) => compareUsages(left, right, sortOrder));
+
+    if (!hideDuplicateAssets) {
+      return sorted;
+    }
+
+    const dedupedByGroup = new Map<string, TweetUsageRecord>();
+    for (const usage of sorted) {
+      const duplicateKey = usage.duplicateGroupId ?? usage.mediaAssetId ?? usage.usageId;
+      if (!dedupedByGroup.has(duplicateKey)) {
+        dedupedByGroup.set(duplicateKey, usage);
+      }
+    }
+
+    return Array.from(dedupedByGroup.values());
+  }, [deferredQuery, hideDuplicateAssets, matchFilter, props.usages, sortOrder]);
 
   function isExpanded(usageId: string): boolean {
     return expandedUsageIds.includes(usageId);
@@ -61,197 +160,300 @@ export function UsageQueue(props: { usages: TweetUsageRecord[] }) {
   }
 
   return (
-    <div className="panel">
-      <div className="sectionHeader">
-        <div>
-          <div className="sectionLabel">Usage Queue</div>
-          <h2 className="sectionTitle">Media usages with analysis and pHash context</h2>
+    <section className="relative z-10 terminal-panel">
+      <div className="panel-body">
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <div className="section-kicker">{props.sectionLabel ?? "Usage Queue"}</div>
+            <h2 className="section-title mt-3">{props.sectionTitle ?? "Review media usages without losing analysis context"}</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
+              Filter the queue to the slice you need, search by author or tweet text, then expand only the cards worth deeper review.
+            </p>
+          </div>
+          <div className="tt-chip tt-chip-accent">{visibleUsages.length} visible</div>
         </div>
-        <div className="chip chipAccent">{visibleUsages.length} visible</div>
-      </div>
 
-      <div className="toolbarRow" style={{ marginBottom: 16 }}>
-        <label className="formRow" style={{ margin: 0 }}>
-          <span>Filter</span>
-          <select
-            className="selectInput"
-            value={matchFilter}
-            onChange={(event) => setMatchFilter(event.target.value as "all" | "phash" | "starred")}
-          >
-            <option value="all">All posts</option>
-            <option value="phash">Only pHash matches</option>
-            <option value="starred">Only starred assets</option>
-          </select>
-        </label>
-
-        <label className="formRow" style={{ margin: 0 }}>
-          <span>View</span>
-          <select
-            className="selectInput"
-            value={viewMode}
-            onChange={(event) => setViewMode(event.target.value as "summary" | "detail")}
-          >
-            <option value="detail">Detail</option>
-            <option value="summary">Summary</option>
-          </select>
-        </label>
-        <label className="formRow" style={{ margin: 0, minWidth: 180 }}>
-          <span>Per Row: {columnsPerRow}</span>
-          <input
-            type="range"
-            min="1"
-            max="6"
-            step="1"
-            value={columnsPerRow}
-            onChange={(event) => setColumnsPerRow(Number(event.target.value))}
-          />
-        </label>
-        <div className="buttonRow">
-          <button type="button" className="actionLink" onClick={expandAll}>
-            Expand all
+        <div className="mb-4 flex flex-wrap gap-2">
+          <button type="button" className={`tt-link ${matchFilter === "all" ? "tt-chip-accent" : ""}`} onClick={() => setMatchFilter("all")}>
+            <span>All {counts.all}</span>
           </button>
-          <button type="button" className="actionLink" onClick={collapseAll}>
-            Collapse all
+          <button type="button" className={`tt-link ${matchFilter === "matched" ? "tt-chip-accent" : ""}`} onClick={() => setMatchFilter("matched")}>
+            <span>Matched {counts.matched}</span>
+          </button>
+          <button type="button" className={`tt-link ${matchFilter === "phash" ? "tt-chip-accent" : ""}`} onClick={() => setMatchFilter("phash")}>
+            <span>Similar {counts.phash}</span>
+          </button>
+          <button type="button" className={`tt-link ${matchFilter === "starred" ? "tt-chip-accent" : ""}`} onClick={() => setMatchFilter("starred")}>
+            <span>Starred {counts.starred}</span>
+          </button>
+          <button
+            type="button"
+            className={`tt-link ${matchFilter === "starred_or_duplicates" ? "tt-chip-accent" : ""}`}
+            onClick={() => setMatchFilter("starred_or_duplicates")}
+          >
+            <span>Starred or duplicates {counts.starred_or_duplicates}</span>
           </button>
         </div>
-      </div>
 
-      <div
-        className="usageList"
-        style={{ ["--usage-columns" as string]: String(columnsPerRow) }}
-      >
-        {visibleUsages.map(({ usageId, tweet, mediaIndex, analysis, phashMatchCount, mediaAssetUsageCount, mediaLocalFilePath, mediaAssetId, mediaAssetStarred }) => {
-          const media = tweet.media[mediaIndex];
-          const displayUrl = resolveMediaDisplayUrl({
-            localFilePath: mediaLocalFilePath,
-            posterUrl: media.posterUrl,
-            previewUrl: media.previewUrl,
-            sourceUrl: media.sourceUrl
-          });
+        <div className="usage-toolbar mb-6">
+          <div className="usage-toolbar-main">
+            <label className="tt-field md:col-span-2">
+              <span className="tt-field-label">Search</span>
+              <input
+                type="text"
+                className="tt-input"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Filter by author, tweet text, or analysis text"
+              />
+            </label>
 
-          return (
-            <article key={usageId} className="usageCard">
-              <div className="usageMedia">
-                {displayUrl ? (
-                  <img
-                    src={displayUrl}
-                    alt={tweet.text ?? "tweet media"}
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      display: "grid",
-                      placeItems: "center",
-                      color: "#d8c5b0"
-                    }}
-                  >
-                    no preview
-                  </div>
-                )}
+            <label className="tt-field">
+              <span className="tt-field-label">View</span>
+              <select
+                className="tt-select"
+                value={viewMode}
+                onChange={(event) => setViewMode(event.target.value as "summary" | "detail")}
+              >
+                <option value="detail">Detail</option>
+                <option value="summary">Summary</option>
+              </select>
+            </label>
+
+            <label className="tt-field">
+              <span className="tt-field-label">Sort</span>
+              <select
+                className="tt-select"
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.target.value as "newest" | "duplicates" | "hotness")}
+              >
+                <option value="newest">Newest</option>
+                <option value="duplicates">Most duplicates</option>
+                <option value="hotness">Hotness</option>
+              </select>
+            </label>
+
+            <label className="tt-field">
+              <span className="tt-field-label">Per Row: {columnsPerRow}</span>
+              <input
+                type="range"
+                min="1"
+                max="5"
+                step="1"
+                value={columnsPerRow}
+                onChange={(event) => setColumnsPerRow(Number(event.target.value))}
+                className="accent-cyan"
+              />
+            </label>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="tt-field">
+              <span className="tt-field-label">Duplicates</span>
+              <div className="tt-subpanel-soft flex min-h-full items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={hideDuplicateAssets}
+                  onChange={(event) => setHideDuplicateAssets(event.target.checked)}
+                  className="tt-checkbox"
+                />
+                <span className="text-sm leading-6 text-slate-200">Hide repeated items so one asset appears once in the queue.</span>
               </div>
-              <div className="usageBody">
-                <div className="buttonRow" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                  <div className="chipRow">
-                    <span className="chip">{tweet.authorUsername}</span>
-                    <span className="chip">{media.mediaKind}</span>
-                    <span className="chip">{formatDate(tweet.createdAt)}</span>
-                    <span className={`chip ${mediaAssetStarred ? "chipAccent" : ""}`}>
-                      {mediaAssetStarred ? "starred" : "not starred"}
-                    </span>
-                  </div>
-                  <button type="button" className="actionLink" onClick={() => toggleExpanded(usageId)}>
-                    {isExpanded(usageId) ? "Hide details" : "Show details"}
-                  </button>
-                </div>
-                <div className="buttonRow usageActionRow" style={{ marginTop: 10, marginBottom: 10 }}>
-                  <Link
-                    href={`/usage/${usageId}`}
-                    className="actionLink compactAction"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Full detail ↗
-                  </Link>
-                  {mediaAssetId ? (
-                    <AssetStarButton
-                      assetId={mediaAssetId}
-                      starred={mediaAssetStarred}
-                      className="actionLink compactAction"
-                    />
-                  ) : null}
-                </div>
+            </label>
 
-                {isExpanded(usageId) ? (
-                  <div className="usageAccordion">
-                    <p className="tweetText">{tweet.text}</p>
-                    <div className="chipRow" style={{ marginBottom: 12 }}>
-                      <span className="chip">likes {tweet.metrics.likes ?? "-"}</span>
-                      <span className="chip">reposts {tweet.metrics.reposts ?? "-"}</span>
-                      <span className="chip">views {tweet.metrics.views ?? "-"}</span>
-                      <span className="chip">{analysis.status}</span>
-                      <span className={`chip ${phashMatchCount > 0 ? "chipAccent" : ""}`}>
-                        pHash matches {phashMatchCount}
-                      </span>
-                      <span className="chip">asset usages {mediaAssetUsageCount}</span>
+            <div className="tt-field">
+              <span className="tt-field-label">Expansion</span>
+              <div className="tt-subpanel-soft flex flex-wrap items-center gap-3">
+                <button type="button" className="tt-link" onClick={expandAll}>
+                  <span>Expand all</span>
+                </button>
+                <button type="button" className="tt-link" onClick={collapseAll}>
+                  <span>Collapse all</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="usage-grid"
+          style={{ ["--usage-grid-columns" as string]: `repeat(${columnsPerRow}, minmax(0, 1fr))` }}
+        >
+          {visibleUsages.map(
+            ({
+              usageId,
+              tweet,
+              mediaIndex,
+              analysis,
+              phashMatchCount,
+              mediaAssetUsageCount,
+              mediaLocalFilePath,
+              mediaPlayableFilePath,
+              mediaAssetId,
+              mediaAssetStarred,
+              duplicateGroupUsageCount,
+              hotnessScore
+            }) => {
+              const media = tweet.media[mediaIndex];
+              const displayUrl = resolveMediaDisplayUrl({
+                localFilePath: mediaLocalFilePath,
+                posterUrl: media.posterUrl,
+                previewUrl: media.previewUrl,
+                sourceUrl: media.sourceUrl
+              });
+
+              return (
+                <article key={usageId} className="neon-card min-w-0 p-3 sm:p-3.5">
+                  <div className={`tt-media-frame ${props.compact ? "aspect-[6/5]" : "aspect-square"}`}>
+                    <MediaPreview
+                      alt={tweet.text ?? "tweet media"}
+                      imageUrl={displayUrl}
+                      videoFilePath={mediaPlayableFilePath}
+                    />
+                    {mediaAssetId ? (
+                      <div className="absolute right-1.5 top-1.5 z-10">
+                        <AssetStarButton
+                          assetId={mediaAssetId}
+                          starred={mediaAssetStarred}
+                          className={mediaAssetStarred ? "tt-icon-button tt-icon-button-secondary bg-[#121826]/90" : "tt-icon-button bg-[#121826]/90"}
+                          wrapperClassName="flex items-center"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className={`${props.compact ? "mt-1.5" : "mt-2"} space-y-1.5`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`status-dot ${analysis.status === "complete" ? "bg-accent" : "bg-orange"}`} />
+                          <h3 className="truncate text-base font-semibold text-slate-100">
+                            {tweet.authorUsername ? `@${tweet.authorUsername}` : "Unknown author"}
+                          </h3>
+                        </div>
+                        <div className="mt-2 text-sm text-slate-400">{formatDate(tweet.createdAt)}</div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <button
+                          type="button"
+                          className="tt-icon-button"
+                          aria-label={isExpanded(usageId) ? "Collapse details" : "Expand details"}
+                          title={isExpanded(usageId) ? "Collapse details" : "Expand details"}
+                          onClick={() => toggleExpanded(usageId)}
+                        >
+                          <span aria-hidden="true">{isExpanded(usageId) ? "−" : "+"}</span>
+                          <span className="sr-only">{isExpanded(usageId) ? "Collapse details" : "Expand details"}</span>
+                        </button>
+                        <Link
+                          href={`/usage/${usageId}`}
+                          className="tt-icon-button tt-icon-button-accent"
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label="Open detail"
+                          title="Open detail"
+                        >
+                          <span aria-hidden="true">↗</span>
+                          <span className="sr-only">Open detail</span>
+                        </Link>
+                      </div>
                     </div>
-                    <AnalyzeUsageButton
-                      tweetId={tweet.tweetId}
-                      mediaIndex={mediaIndex}
-                      className="actionButton compactPrimaryAction"
-                    />
 
-                    {viewMode === "detail" ? (
-                      <div className="fieldGrid">
-                        <div className="fieldCard">
-                          <strong>Conveys</strong>
-                          <span className={!analysis.conveys ? "placeholder" : undefined}>{renderField(analysis.conveys)}</span>
-                        </div>
-                        <div className="fieldCard">
-                          <strong>User Intent</strong>
-                          <span className={!analysis.user_intent ? "placeholder" : undefined}>
-                            {renderField(analysis.user_intent)}
+                    <div className="usage-card-meta">
+                      <span className="tt-chip">{media.mediaKind}</span>
+                      <span className="tt-chip">{analysis.status}</span>
+                      <span className={`tt-chip ${duplicateGroupUsageCount > 1 ? "tt-chip-accent" : ""}`}>
+                        duplicates {duplicateGroupUsageCount}
+                      </span>
+                      <span className={`tt-chip ${hotnessScore >= 4 ? "tt-chip-accent" : ""}`}>
+                        hot {hotnessScore.toFixed(2)}
+                      </span>
+                      <span className={`tt-chip ${phashMatchCount > 0 ? "tt-chip-accent" : ""}`}>
+                        similar {phashMatchCount}
+                      </span>
+                      <span className={`tt-chip ${mediaAssetStarred ? "tt-chip-accent" : ""}`}>
+                        {mediaAssetStarred ? "starred" : "not starred"}
+                      </span>
+                    </div>
+
+                    {!isExpanded(usageId) ? (
+                      <p className="usage-preview-text">{tweet.text || analysis.caption_brief || "No tweet text captured for this usage."}</p>
+                    ) : null}
+
+                    {isExpanded(usageId) ? (
+                      <div className="border-t border-border pt-2.5">
+                        <p className="text-sm leading-6 text-slate-200">{tweet.text}</p>
+                        <div className="mt-2.5 flex flex-wrap gap-1.5">
+                          <span className="tt-chip">likes {tweet.metrics.likes ?? "-"}</span>
+                          <span className="tt-chip">reposts {tweet.metrics.reposts ?? "-"}</span>
+                          <span className="tt-chip">views {tweet.metrics.views ?? "-"}</span>
+                          <span className="tt-chip">{analysis.status}</span>
+                          <span className={`tt-chip ${hotnessScore >= 4 ? "tt-chip-accent" : ""}`}>hotness {hotnessScore.toFixed(2)}</span>
+                          <span className={`tt-chip ${phashMatchCount > 0 ? "tt-chip-accent" : ""}`}>
+                            similar matches {phashMatchCount}
                           </span>
+                          <span className="tt-chip">asset usages {mediaAssetUsageCount}</span>
                         </div>
-                        <div className="fieldCard">
-                          <strong>Rhetorical Role</strong>
-                          <span className={!analysis.rhetorical_role ? "placeholder" : undefined}>
-                            {renderField(analysis.rhetorical_role)}
-                          </span>
+
+                        <div className="mt-2.5">
+                          <AnalyzeUsageButton
+                            tweetId={tweet.tweetId}
+                            mediaIndex={mediaIndex}
+                            className="tt-button"
+                          />
                         </div>
-                        <div className="fieldCard">
-                          <strong>Metaphor</strong>
-                          <span className={!analysis.metaphor ? "placeholder" : undefined}>
-                            {renderField(analysis.metaphor)}
-                          </span>
-                        </div>
-                        <div className="fieldCard">
-                          <strong>Text Media Relationship</strong>
-                          <span className={!analysis.text_media_relationship ? "placeholder" : undefined}>
-                            {renderField(analysis.text_media_relationship)}
-                          </span>
-                        </div>
-                        <div className="fieldCard">
-                          <strong>Why It Works</strong>
-                          <span className={!analysis.why_it_works ? "placeholder" : undefined}>
-                            {renderField(analysis.why_it_works)}
-                          </span>
-                        </div>
+
+                        {viewMode === "detail" ? (
+                          <div className="mt-2.5 grid gap-2 md:grid-cols-2">
+                            <div className="tt-subpanel-soft">
+                              <strong className="tt-data-label">Conveys</strong>
+                              <div className={`mt-2 text-sm leading-7 ${!analysis.conveys ? "text-muted" : "text-slate-200"}`}>
+                                {renderField(analysis.conveys)}
+                              </div>
+                            </div>
+                            <div className="tt-subpanel-soft">
+                              <strong className="tt-data-label">User Intent</strong>
+                              <div className={`mt-2 text-sm leading-7 ${!analysis.user_intent ? "text-muted" : "text-slate-200"}`}>
+                                {renderField(analysis.user_intent)}
+                              </div>
+                            </div>
+                            <div className="tt-subpanel-soft">
+                              <strong className="tt-data-label">Rhetorical Role</strong>
+                              <div className={`mt-2 text-sm leading-7 ${!analysis.rhetorical_role ? "text-muted" : "text-slate-200"}`}>
+                                {renderField(analysis.rhetorical_role)}
+                              </div>
+                            </div>
+                            <div className="tt-subpanel-soft">
+                              <strong className="tt-data-label">Metaphor</strong>
+                              <div className={`mt-2 text-sm leading-7 ${!analysis.metaphor ? "text-muted" : "text-slate-200"}`}>
+                                {renderField(analysis.metaphor)}
+                              </div>
+                            </div>
+                            <div className="tt-subpanel-soft">
+                              <strong className="tt-data-label">Text Media Relationship</strong>
+                              <div className={`mt-2 text-sm leading-7 ${!analysis.text_media_relationship ? "text-muted" : "text-slate-200"}`}>
+                                {renderField(analysis.text_media_relationship)}
+                              </div>
+                            </div>
+                            <div className="tt-subpanel-soft">
+                              <strong className="tt-data-label">Why It Works</strong>
+                              <div className={`mt-2 text-sm leading-7 ${!analysis.why_it_works ? "text-muted" : "text-slate-200"}`}>
+                                {renderField(analysis.why_it_works)}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="tt-subpanel mt-2.5 text-sm leading-6 text-slate-300">
+                            {analysis.caption_brief ?? analysis.scene_description ?? "Open detail view for full analysis and similarity match context."}
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="helperText">
-                        {analysis.caption_brief ?? analysis.scene_description ?? "Open detail view for full analysis and pHash match context."}
-                      </div>
-                    )}
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
-            </article>
-          );
-        })}
+                </article>
+              );
+            }
+          )}
+        </div>
       </div>
-    </div>
+    </section>
   );
 }

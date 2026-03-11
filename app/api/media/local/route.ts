@@ -4,12 +4,15 @@ import { NextResponse } from "next/server";
 
 const projectRoot = process.cwd();
 const rawMediaRoot = path.join(projectRoot, "data", "raw");
+const assetVideoRoot = path.join(projectRoot, "data", "analysis", "media-assets", "videos");
 const MIME_BY_EXTENSION: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".png": "image/png",
   ".webp": "image/webp",
   ".gif": "image/gif",
+  ".m3u8": "application/vnd.apple.mpegurl",
+  ".m4s": "video/iso.segment",
   ".mp4": "video/mp4",
   ".bin": "application/octet-stream"
 };
@@ -89,8 +92,13 @@ export async function GET(request: Request) {
   const normalizedPath = path.normalize(relativePath).replace(/^(\.\.(\/|\\|$))+/, "");
   const absolutePath = path.resolve(projectRoot, normalizedPath);
 
-  if (!absolutePath.startsWith(`${rawMediaRoot}${path.sep}`) && absolutePath !== rawMediaRoot) {
-    return NextResponse.json({ error: "Path is outside raw media directory" }, { status: 403 });
+  const allowedRoots = [rawMediaRoot, assetVideoRoot];
+  const isAllowedPath = allowedRoots.some(
+    (root) => absolutePath === root || absolutePath.startsWith(`${root}${path.sep}`)
+  );
+
+  if (!isAllowedPath) {
+    return NextResponse.json({ error: "Path is outside allowed media directories" }, { status: 403 });
   }
 
   if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {

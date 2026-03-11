@@ -6,7 +6,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const query = searchParams.get("query");
     const facetName = searchParams.get("facetName") || undefined;
-    const limit = Number(searchParams.get("limit") || 8);
+    const limit = Number(searchParams.get("limit") || 20);
 
     if (!query) {
       return NextResponse.json({ error: "query is required" }, { status: 400 });

@@ -24,6 +24,15 @@ export interface MediaFingerprint {
   height: number | null;
 }
 
+export interface MediaSimilarityEmbedding {
+  model: string;
+  outputDimensionality: number;
+  taskType: "SEMANTIC_SIMILARITY";
+  modality: "image";
+  normalized: boolean;
+  values: number[];
+}
+
 export interface ExtractedTweet {
   sourceName: string;
   tweetId: string | null;
@@ -85,6 +94,9 @@ export interface UsageAnalysis {
   visible_objects: string[];
   setting_context: string | null;
   action_or_event: string | null;
+  video_music: string | null;
+  video_sound: string | null;
+  video_action: string | null;
   primary_emotion: string | null;
   emotional_tone: string | null;
   conveys: string | null;
@@ -94,6 +106,11 @@ export interface UsageAnalysis {
   metaphor: string | null;
   humor_mechanism: string | null;
   cultural_reference: string | null;
+  reference_entity: string | null;
+  reference_source: string | null;
+  reference_plot_context: string | null;
+  analogy_target: string | null;
+  analogy_scope: string | null;
   meme_format: string | null;
   persuasion_strategy: string | null;
   brand_signals: string[];
@@ -110,8 +127,11 @@ export interface MediaAssetRecord {
   assetId: string;
   canonicalMediaUrl: string | null;
   canonicalFilePath: string | null;
+  promotedVideoSourceUrl: string | null;
+  promotedVideoFilePath: string | null;
   mediaKind: MediaKind | InterceptedMediaClass;
   fingerprint: MediaFingerprint | null;
+  similarityEmbedding: MediaSimilarityEmbedding | null;
   starred: boolean;
   usageIds: string[];
   sourceUrls: string[];
@@ -139,14 +159,19 @@ export interface TweetUsageRecord {
   analysis: UsageAnalysis;
   mediaAssetId: string | null;
   mediaLocalFilePath: string | null;
+  mediaPlayableFilePath: string | null;
   mediaAssetStarred: boolean;
   mediaAssetUsageCount: number;
   phashMatchCount: number;
+  duplicateGroupId: string | null;
+  duplicateGroupUsageCount: number;
+  hotnessScore: number;
 }
 
 export interface MediaAssetPhashMatch {
   asset: MediaAssetRecord;
-  distance: number;
+  distance: number | null;
+  similarityScore: number;
   usages: TweetUsageRecord[];
 }
 
@@ -155,6 +180,7 @@ export interface MediaAssetView {
   summary: MediaAssetSummary | null;
   duplicateUsages: TweetUsageRecord[];
   phashMatches: MediaAssetPhashMatch[];
+  nearestNeighbors: MediaAssetPhashMatch[];
 }
 
 export type RunTask =
@@ -162,7 +188,8 @@ export type RunTask =
   | "crawl_openclaw"
   | "capture_openclaw_current"
   | "analyze_missing"
-  | "rebuild_media_assets";
+  | "rebuild_media_assets"
+  | "backfill_media_native_types";
 export type RunTrigger = "manual" | "scheduled";
 export type RunStatus = "queued" | "running" | "completed" | "failed";
 
@@ -176,6 +203,9 @@ export interface SchedulerConfig {
   updatedAt: string;
   lastEvaluatedAt: string | null;
   lastTriggeredAt: string | null;
+  lastProcessedSlotAt: string | null;
+  lastSkippedAt: string | null;
+  lastSkipReason: string | null;
 }
 
 export interface RunHistoryEntry {
