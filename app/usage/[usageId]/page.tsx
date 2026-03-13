@@ -8,7 +8,7 @@ export default async function UsageDetailPage({
   params: Promise<{ usageId: string }>;
 }) {
   const { usageId } = await params;
-  const detail = getUsageDetail(usageId);
+  const detail = await getUsageDetail(usageId);
 
   if (!detail) {
     notFound();
@@ -35,6 +35,7 @@ export default async function UsageDetailPage({
       }}
       orderedFacets={detail.orderedFacets}
       mediaAssetView={detail.mediaAssetView}
+      relevantTopics={detail.relevantTopics}
     />
   );
 }

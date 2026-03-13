@@ -167,6 +167,36 @@ The dashboard currently shows:
 - run controls, daily schedule config, and local run/error logs
 - facet search over the local Chroma index
 
+## Agent-friendly CLI
+
+The repo has CLI entrypoints in [`src/cli`](/Users/nicklocascio/Projects/twitter-trend/src/cli), plus an installed top-level binary in [`bin/x-media-analyst.mjs`](/Users/nicklocascio/Projects/twitter-trend/bin/x-media-analyst.mjs).
+
+Install it once for use from any directory:
+
+```bash
+npm link
+x-media-analyst help
+x-media-analyst repo root
+```
+
+Examples:
+
+```bash
+x-media-analyst facet list
+x-media-analyst search facets --query "terminal dashboard" --facet scene_description --limit 5
+x-media-analyst search facets --query "reaction image" --format jsonl
+x-media-analyst app dev
+x-media-analyst run stack
+```
+
+`x-media-analyst search facets` returns structured output with:
+
+- search scores and retrieval mode
+- usage IDs, tweet IDs, and tweet URLs
+- media asset IDs and media URLs
+- matched facet names, descriptions, and values
+- full saved analysis payloads for each matching usage
+
 ## Run control and scheduling
 
 The dashboard now includes:

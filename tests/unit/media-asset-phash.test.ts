@@ -69,6 +69,7 @@ function buildUsage(usageId: string, mediaAssetId: string): TweetUsageRecord {
       action_or_event: null,
       video_music: null,
       video_sound: null,
+      video_dialogue: null,
       video_action: null,
       primary_emotion: null,
       emotional_tone: null,

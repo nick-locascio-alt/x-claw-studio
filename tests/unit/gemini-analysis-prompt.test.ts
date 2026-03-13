@@ -63,6 +63,7 @@ describe("buildTweetMediaAnalysisPrompt", () => {
     expect(prompt).toContain("Use the same facet structure as image analysis.");
     expect(prompt).toContain("reference_entity:");
     expect(prompt).toContain("video_music");
+    expect(prompt).toContain("video_dialogue");
     expect(prompt).toContain("search_keywords:");
   });
 });

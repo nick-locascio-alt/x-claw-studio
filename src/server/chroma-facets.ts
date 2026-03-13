@@ -1,11 +1,23 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { ChromaClient, type Metadata } from "chromadb";
 import { GoogleGenAI } from "@google/genai";
-import { ANALYSIS_FACET_NAMES, type AnalysisFacetName } from "@/src/lib/analysis-schema";
+import {
+  ANALYSIS_FACET_DESCRIPTIONS,
+  ANALYSIS_FACET_NAMES,
+  type AnalysisFacetName
+} from "@/src/lib/analysis-schema";
 import { getGeminiApiKey, loadEnv } from "@/src/lib/env";
 import { readAllUsageAnalyses } from "@/src/server/analysis-store";
+import { readAllTopicAnalyses } from "@/src/server/topic-analysis-store";
 import { getDashboardData } from "@/src/server/data";
-import type { ExtractedTweet, MediaAssetRecord, TweetUsageRecord, UsageAnalysis } from "@/src/lib/types";
+import type {
+  ExtractedTweet,
+  MediaAssetRecord,
+  TopicClusterRecord,
+  TweetTopicAnalysisRecord,
+  TweetUsageRecord,
+  UsageAnalysis
+} from "@/src/lib/types";
 
 loadEnv();
 const chromaUrl = process.env.CHROMA_URL || "http://localhost:8000";
@@ -152,8 +164,17 @@ export interface HybridSearchRow {
     sourceUrl: string | null;
     previewUrl: string | null;
     posterUrl: string | null;
+    tweetUrl: string | null;
     tweetText: string | null;
+    authorHandle: string | null;
     authorUsername: string | null;
+    authorDisplayName: string | null;
+    createdAt: string | null;
+    mediaIndex: number;
+    duplicateGroupId: string | null;
+    hotnessScore: number;
+    mediaAssetStarred: boolean;
+    mediaAssetUsageCount: number;
   } | null;
   vectorDistance: number | null;
   vectorScore: number;
@@ -169,9 +190,59 @@ export interface HybridSearchResult {
   results: HybridSearchRow[];
 }
 
+export interface TopicSearchRow {
+  id: string;
+  document: string;
+  metadata: Metadata;
+  tweet: {
+    tweetKey: string;
+    tweetId: string | null;
+    authorUsername: string | null;
+    text: string | null;
+    createdAt: string | null;
+  };
+  topic: {
+    topicId: string | null;
+    label: string | null;
+    hotnessScore: number;
+    tweetCount: number;
+    isStale: boolean;
+  };
+  analysis: {
+    analysisId: string;
+    summaryLabel: string | null;
+    isNews: boolean;
+    newsPeg: string | null;
+    whyNow: string | null;
+    sentiment: TweetTopicAnalysisRecord["sentiment"];
+    stance: TweetTopicAnalysisRecord["stance"];
+    emotionalTone: string | null;
+    opinionIntensity: TweetTopicAnalysisRecord["opinionIntensity"];
+    targetEntity: string | null;
+    signals: string[];
+  };
+  usageIds: string[];
+  vectorDistance: number | null;
+  vectorScore: number;
+  lexicalScore: number;
+  combinedScore: number;
+  matchedBy: Array<"vector" | "lexical">;
+}
+
+export interface TopicSearchResult {
+  query: string;
+  limit: number;
+  results: TopicSearchRow[];
+}
+
 interface FacetSearchContext {
   tweetText?: string | null;
   authorUsername?: string | null;
+}
+
+interface TopicSearchContext {
+  topicClustersByNormalizedLabel: Map<string, TopicClusterRecord>;
+  usagesById: Map<string, TweetUsageRecord>;
 }
 
 function normalizeScore(value: number, maxValue: number): number {
@@ -188,6 +259,207 @@ function tokenize(text: string): string[] {
     .split(/[^a-z0-9]+/i)
     .map((token) => token.trim())
     .filter((token) => token.length > 1);
+}
+
+function normalizeTopicLabel(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[“”"']/g, "")
+    .replace(/\.$/, "")
+    .toLowerCase();
+
+  return normalized || null;
+}
+
+function collectTopicFacetValues(usages: TweetUsageRecord[]): string[] {
+  const values = new Set<string>();
+  const facets: Array<keyof UsageAnalysis> = [
+    "conveys",
+    "user_intent",
+    "rhetorical_role",
+    "text_media_relationship",
+    "primary_emotion",
+    "emotional_tone",
+    "reference_entity",
+    "reference_source",
+    "cultural_reference",
+    "analogy_target",
+    "trend_signal"
+  ];
+
+  for (const usage of usages) {
+    for (const facet of facets) {
+      const value = usage.analysis[facet];
+      if (typeof value === "string" && value.trim()) {
+        values.add(`${facet}: ${value.trim()}`);
+      }
+    }
+
+    for (const value of usage.analysis.brand_signals) {
+      if (value.trim()) {
+        values.add(`brand_signal: ${value.trim()}`);
+      }
+    }
+
+    for (const value of usage.analysis.search_keywords) {
+      if (value.trim()) {
+        values.add(`search_keyword: ${value.trim()}`);
+      }
+    }
+  }
+
+  return Array.from(values);
+}
+
+function buildTopicDocument(analysis: TweetTopicAnalysisRecord, usages: TweetUsageRecord[]): string {
+  const lines = [
+    "analysis_scope: topic_tweet",
+    `analysis_id: ${analysis.analysisId}`,
+    `tweet_key: ${analysis.tweetKey}`,
+    `summary_label: ${analysis.summaryLabel ?? "none"}`,
+    `is_news: ${analysis.isNews ? "true" : "false"}`,
+    `sentiment: ${analysis.sentiment}`,
+    `stance: ${analysis.stance}`,
+    `opinion_intensity: ${analysis.opinionIntensity}`
+  ];
+
+  if (analysis.targetEntity) {
+    lines.push(`target_entity: ${analysis.targetEntity}`);
+  }
+
+  if (analysis.newsPeg) {
+    lines.push(`news_peg: ${analysis.newsPeg}`);
+  }
+
+  if (analysis.whyNow) {
+    lines.push(`why_now: ${analysis.whyNow}`);
+  }
+
+  if (analysis.emotionalTone) {
+    lines.push(`emotional_tone: ${analysis.emotionalTone}`);
+  }
+
+  if (analysis.text) {
+    lines.push(`tweet_text: ${analysis.text}`);
+  }
+
+  if (analysis.authorUsername) {
+    lines.push(`author_username: ${analysis.authorUsername}`);
+  }
+
+  if (analysis.signals.length > 0) {
+    lines.push(`signals: ${analysis.signals.map((signal) => signal.label).join(", ")}`);
+  }
+
+  for (const value of collectTopicFacetValues(usages)) {
+    lines.push(value);
+  }
+
+  return lines.join("\n");
+}
+
+function buildTopicMetadata(
+  analysis: TweetTopicAnalysisRecord,
+  topicCluster: TopicClusterRecord | null
+): Record<string, string | number | boolean | null> {
+  return {
+    analysis_scope: "topic_tweet",
+    analysis_id: analysis.analysisId,
+    tweet_key: analysis.tweetKey,
+    tweet_id: analysis.tweetId ?? "unknown",
+    author_username: analysis.authorUsername ?? "unknown",
+    summary_label: analysis.summaryLabel,
+    topic_id: topicCluster?.topicId ?? null,
+    topic_label: topicCluster?.label ?? analysis.summaryLabel,
+    sentiment: analysis.sentiment,
+    stance: analysis.stance,
+    emotional_tone: analysis.emotionalTone,
+    opinion_intensity: analysis.opinionIntensity,
+    target_entity: analysis.targetEntity,
+    is_news: analysis.isNews,
+    topic_hotness_score: topicCluster?.hotnessScore ?? 0,
+    topic_tweet_count: topicCluster?.tweetCount ?? 0
+  };
+}
+
+function buildTopicSearchContext(): TopicSearchContext {
+  const data = getDashboardData();
+  return {
+    topicClustersByNormalizedLabel: new Map(
+      data.topicClusters
+        .map((cluster) => [normalizeTopicLabel(cluster.label), cluster] as const)
+        .filter((entry): entry is [string, TopicClusterRecord] => Boolean(entry[0]))
+    ),
+    usagesById: new Map(data.tweetUsages.map((usage) => [usage.usageId, usage]))
+  };
+}
+
+function findTopicCluster(
+  analysis: TweetTopicAnalysisRecord,
+  context: TopicSearchContext
+): TopicClusterRecord | null {
+  const normalized = normalizeTopicLabel(analysis.summaryLabel);
+  if (!normalized) {
+    return null;
+  }
+
+  return context.topicClustersByNormalizedLabel.get(normalized) ?? null;
+}
+
+function buildTopicSearchRow(input: {
+  id: string;
+  document: string;
+  metadata: Metadata;
+  analysis: TweetTopicAnalysisRecord;
+  topicCluster: TopicClusterRecord | null;
+  vectorDistance: number | null;
+  vectorScore: number;
+  lexicalScore: number;
+  matchedBy: Array<"vector" | "lexical">;
+}): TopicSearchRow {
+  return {
+    id: input.id,
+    document: input.document,
+    metadata: input.metadata,
+    tweet: {
+      tweetKey: input.analysis.tweetKey,
+      tweetId: input.analysis.tweetId,
+      authorUsername: input.analysis.authorUsername,
+      text: input.analysis.text,
+      createdAt: input.analysis.createdAt
+    },
+    topic: {
+      topicId: input.topicCluster?.topicId ?? null,
+      label: input.topicCluster?.label ?? input.analysis.summaryLabel,
+      hotnessScore: input.topicCluster?.hotnessScore ?? 0,
+      tweetCount: input.topicCluster?.tweetCount ?? 0,
+      isStale: input.topicCluster?.isStale ?? false
+    },
+    analysis: {
+      analysisId: input.analysis.analysisId,
+      summaryLabel: input.analysis.summaryLabel,
+      isNews: input.analysis.isNews,
+      newsPeg: input.analysis.newsPeg,
+      whyNow: input.analysis.whyNow,
+      sentiment: input.analysis.sentiment,
+      stance: input.analysis.stance,
+      emotionalTone: input.analysis.emotionalTone,
+      opinionIntensity: input.analysis.opinionIntensity,
+      targetEntity: input.analysis.targetEntity,
+      signals: input.analysis.signals.map((signal) => signal.label)
+    },
+    usageIds: input.analysis.usageIds,
+    vectorDistance: input.vectorDistance,
+    vectorScore: input.vectorScore,
+    lexicalScore: input.lexicalScore,
+    combinedScore: 0,
+    matchedBy: input.matchedBy
+  };
 }
 
 function buildFacetDocument(
@@ -282,6 +554,9 @@ function buildFacetMetadata(analysis: UsageAnalysis, facetName: AnalysisFacetNam
     usage_id: analysis.usageId,
     tweet_id: analysis.tweetId ?? "unknown",
     facet_name: facetName,
+    facet_description: ANALYSIS_FACET_DESCRIPTIONS[facetName],
+    facet_value: facetValueToText(analysis[facetName]),
+    media_index: analysis.mediaIndex,
     media_kind: analysis.mediaKind
   };
 }
@@ -386,8 +661,17 @@ function buildLexicalRows(params: {
         sourceUrl: media?.sourceUrl ?? null,
         previewUrl: media?.previewUrl ?? null,
         posterUrl: media?.posterUrl ?? null,
+        tweetUrl: usage.tweet.tweetUrl,
         tweetText: usage.tweet.text,
-        authorUsername: usage.tweet.authorUsername
+        authorHandle: usage.tweet.authorHandle,
+        authorUsername: usage.tweet.authorUsername,
+        authorDisplayName: usage.tweet.authorDisplayName,
+        createdAt: usage.tweet.createdAt,
+        mediaIndex: usage.mediaIndex,
+        duplicateGroupId: usage.duplicateGroupId,
+        hotnessScore: usage.hotnessScore,
+        mediaAssetStarred: usage.mediaAssetStarred,
+        mediaAssetUsageCount: usage.mediaAssetUsageCount
       };
     })(),
     vectorDistance: null,
@@ -396,6 +680,95 @@ function buildLexicalRows(params: {
     combinedScore: 0,
     matchedBy: ["lexical"]
   }));
+}
+
+function buildTopicLexicalRows(params: {
+  query: string;
+  limit: number;
+  context: TopicSearchContext;
+}): TopicSearchRow[] {
+  const analyses = readAllTopicAnalyses();
+  const docs: Array<{
+    id: string;
+    document: string;
+    metadata: Record<string, string | number | boolean | null>;
+    analysis: TweetTopicAnalysisRecord;
+    topicCluster: TopicClusterRecord | null;
+    tokens: string[];
+  }> = [];
+
+  for (const analysis of analyses) {
+    const usages = analysis.usageIds
+      .map((usageId) => params.context.usagesById.get(usageId))
+      .filter((usage): usage is TweetUsageRecord => Boolean(usage));
+    const topicCluster = findTopicCluster(analysis, params.context);
+    const document = buildTopicDocument(analysis, usages);
+    docs.push({
+      id: analysis.analysisId,
+      document,
+      metadata: buildTopicMetadata(analysis, topicCluster),
+      analysis,
+      topicCluster,
+      tokens: tokenize(document)
+    });
+  }
+
+  const queryTokens = tokenize(params.query);
+  if (queryTokens.length === 0) {
+    return [];
+  }
+
+  const docFrequency = new Map<string, number>();
+  for (const doc of docs) {
+    for (const token of new Set(doc.tokens)) {
+      docFrequency.set(token, (docFrequency.get(token) ?? 0) + 1);
+    }
+  }
+
+  const avgDocLength = docs.length > 0 ? docs.reduce((sum, doc) => sum + doc.tokens.length, 0) / docs.length : 0;
+  const k1 = 1.2;
+  const b = 0.75;
+
+  const scored = docs
+    .map((doc) => {
+      const termCounts = new Map<string, number>();
+      for (const token of doc.tokens) {
+        termCounts.set(token, (termCounts.get(token) ?? 0) + 1);
+      }
+
+      const score = queryTokens.reduce((sum, token) => {
+        const tf = termCounts.get(token) ?? 0;
+        if (tf === 0) {
+          return sum;
+        }
+
+        const df = docFrequency.get(token) ?? 0;
+        const idf = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));
+        const numerator = tf * (k1 + 1);
+        const denominator = tf + k1 * (1 - b + (b * doc.tokens.length) / Math.max(avgDocLength, 1));
+        return sum + idf * (numerator / denominator);
+      }, 0);
+
+      return { doc, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  const maxScore = scored[0]?.score ?? 0;
+
+  return scored.slice(0, Math.max(params.limit * 4, 40)).map(({ doc, score }) =>
+    buildTopicSearchRow({
+      id: doc.id,
+      document: doc.document,
+      metadata: doc.metadata,
+      analysis: doc.analysis,
+      topicCluster: doc.topicCluster,
+      vectorDistance: null,
+      vectorScore: 0,
+      lexicalScore: normalizeScore(score, maxScore),
+      matchedBy: ["lexical"]
+    })
+  );
 }
 
 export async function indexUsageAnalysisInChroma(
@@ -505,6 +878,145 @@ export async function indexAssetVideoAnalysisInChroma(
   }
 }
 
+export async function indexTopicAnalysisInChroma(
+  analysis: TweetTopicAnalysisRecord,
+  usages: TweetUsageRecord[]
+): Promise<{ indexedCount: number }> {
+  const context = buildTopicSearchContext();
+  const topicCluster = findTopicCluster(analysis, context);
+  const document = buildTopicDocument(analysis, usages);
+  const metadata = buildTopicMetadata(analysis, topicCluster);
+
+  try {
+    const embeddings = await embedTexts([document]);
+    return upsertWithExplicitEmbeddings({
+      ids: [analysis.analysisId],
+      documents: [document],
+      metadatas: [metadata],
+      embeddings
+    });
+  } catch (error) {
+    console.warn(`Skipping Chroma indexing for topic analysis ${analysis.analysisId}. ${getErrorMessage(error)}`);
+    return { indexedCount: 0 };
+  }
+}
+
+export async function searchTopicIndex(params: {
+  query: string;
+  limit?: number;
+}): Promise<TopicSearchResult> {
+  const limit = params.limit ?? 12;
+  const context = buildTopicSearchContext();
+  const analyses = readAllTopicAnalyses();
+  const analysesById = new Map(analyses.map((analysis) => [analysis.analysisId, analysis]));
+  const lexicalRows = buildTopicLexicalRows({
+    query: params.query,
+    limit,
+    context
+  });
+
+  let vectorRows: TopicSearchRow[] = [];
+  try {
+    const collection = await getCollection();
+    const queryEmbeddings = await embedTexts([params.query]);
+    const result = await collection.query({
+      queryEmbeddings,
+      nResults: Math.max(limit * 4, 40),
+      where: { analysis_scope: "topic_tweet" },
+      include: ["documents", "metadatas", "distances"]
+    });
+
+    const distances = (result.distances?.[0] ?? []).filter(
+      (distance): distance is number => typeof distance === "number"
+    );
+    const maxDistance = distances.length > 0 ? Math.max(...distances) : 0;
+
+    vectorRows =
+      result.ids?.[0]?.flatMap((id, index) => {
+        const analysis = analysesById.get(id);
+        if (!analysis) {
+          return [];
+        }
+
+        const distance = distances[index] ?? null;
+        const vectorScore =
+          distance === null
+            ? 0
+            : maxDistance > 0
+              ? 1 - distance / maxDistance
+              : 1;
+        const topicCluster = findTopicCluster(analysis, context);
+
+        return [
+          buildTopicSearchRow({
+            id,
+            document: result.documents?.[0]?.[index] ?? "",
+            metadata: result.metadatas?.[0]?.[index] ?? {},
+            analysis,
+            topicCluster,
+            vectorDistance: distance,
+            vectorScore,
+            lexicalScore: 0,
+            matchedBy: ["vector"]
+          })
+        ];
+      }) ?? [];
+  } catch (error) {
+    console.warn(
+      `Topic vector search failed, falling back to lexical only: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  const merged = new Map<string, TopicSearchRow>();
+
+  for (const row of vectorRows) {
+    merged.set(row.id, row);
+  }
+
+  for (const row of lexicalRows) {
+    const existing = merged.get(row.id);
+    if (!existing) {
+      merged.set(row.id, row);
+      continue;
+    }
+
+    merged.set(row.id, {
+      ...existing,
+      lexicalScore: row.lexicalScore,
+      combinedScore: 0,
+      matchedBy: Array.from(new Set([...existing.matchedBy, "lexical"]))
+    });
+  }
+
+  const rows = Array.from(merged.values())
+    .map((row) => ({
+      ...row,
+      combinedScore: row.vectorScore * hybridVectorWeight + row.lexicalScore * hybridLexicalWeight
+    }))
+    .sort((left, right) => {
+      if (right.combinedScore !== left.combinedScore) {
+        return right.combinedScore - left.combinedScore;
+      }
+
+      if (right.topic.hotnessScore !== left.topic.hotnessScore) {
+        return right.topic.hotnessScore - left.topic.hotnessScore;
+      }
+
+      if (left.vectorDistance !== null && right.vectorDistance !== null && left.vectorDistance !== right.vectorDistance) {
+        return left.vectorDistance - right.vectorDistance;
+      }
+
+      return right.lexicalScore - left.lexicalScore;
+    })
+    .slice(0, limit);
+
+  return {
+    query: params.query,
+    limit,
+    results: rows
+  };
+}
+
 export async function searchFacetIndex(params: {
   query: string;
   facetName?: AnalysisFacetName;
@@ -563,8 +1075,17 @@ export async function searchFacetIndex(params: {
               sourceUrl: media?.sourceUrl ?? null,
               previewUrl: media?.previewUrl ?? null,
               posterUrl: media?.posterUrl ?? null,
+              tweetUrl: usage.tweet.tweetUrl,
               tweetText: usage.tweet.text,
-              authorUsername: usage.tweet.authorUsername
+              authorHandle: usage.tweet.authorHandle,
+              authorUsername: usage.tweet.authorUsername,
+              authorDisplayName: usage.tweet.authorDisplayName,
+              createdAt: usage.tweet.createdAt,
+              mediaIndex: usage.mediaIndex,
+              duplicateGroupId: usage.duplicateGroupId,
+              hotnessScore: usage.hotnessScore,
+              mediaAssetStarred: usage.mediaAssetStarred,
+              mediaAssetUsageCount: usage.mediaAssetUsageCount
             };
           })(),
           vectorDistance: distance,

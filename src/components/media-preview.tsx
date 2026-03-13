@@ -7,16 +7,26 @@ interface MediaPreviewProps {
   alt: string;
   imageUrl: string | null;
   videoFilePath?: string | null;
+  videoUrl?: string | null;
   showVideoByDefault?: boolean;
 }
 
-export function MediaPreview({ alt, imageUrl, videoFilePath, showVideoByDefault = false }: MediaPreviewProps) {
-  const [isPlaying, setIsPlaying] = useState(showVideoByDefault && Boolean(videoFilePath));
-  const videoUrl = useMemo(() => buildLocalMediaUrl(videoFilePath), [videoFilePath]);
+export function MediaPreview({
+  alt,
+  imageUrl,
+  videoFilePath,
+  videoUrl: remoteVideoUrl,
+  showVideoByDefault = false
+}: MediaPreviewProps) {
+  const resolvedVideoUrl = useMemo(
+    () => buildLocalMediaUrl(videoFilePath) ?? remoteVideoUrl ?? null,
+    [remoteVideoUrl, videoFilePath]
+  );
+  const [isPlaying, setIsPlaying] = useState(showVideoByDefault && Boolean(resolvedVideoUrl));
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (!videoFilePath) {
+    if (!resolvedVideoUrl) {
       setIsPlaying(false);
       return;
     }
@@ -24,16 +34,16 @@ export function MediaPreview({ alt, imageUrl, videoFilePath, showVideoByDefault 
     if (showVideoByDefault) {
       setIsPlaying(true);
     }
-  }, [showVideoByDefault, videoFilePath]);
+  }, [resolvedVideoUrl, showVideoByDefault]);
 
   useEffect(() => {
-    if (!isPlaying || !videoUrl || !videoRef.current) {
+    if (!isPlaying || !resolvedVideoUrl || !videoRef.current) {
       return;
     }
 
     const videoElement = videoRef.current;
-    if (!videoUrl.includes(".m3u8")) {
-      videoElement.src = videoUrl;
+    if (!resolvedVideoUrl.includes(".m3u8")) {
+      videoElement.src = resolvedVideoUrl;
       return;
     }
 
@@ -47,13 +57,13 @@ export function MediaPreview({ alt, imageUrl, videoFilePath, showVideoByDefault 
 
       if (Hls.isSupported()) {
         hls = new Hls();
-        hls.loadSource(videoUrl);
+        hls.loadSource(resolvedVideoUrl);
         hls.attachMedia(videoElement);
         return;
       }
 
       if (videoElement.canPlayType("application/vnd.apple.mpegurl")) {
-        videoElement.src = videoUrl;
+        videoElement.src = resolvedVideoUrl;
       }
     });
 
@@ -61,9 +71,9 @@ export function MediaPreview({ alt, imageUrl, videoFilePath, showVideoByDefault 
       isCancelled = true;
       hls?.destroy();
     };
-  }, [isPlaying, videoUrl]);
+  }, [isPlaying, resolvedVideoUrl]);
 
-  if (videoUrl && isPlaying) {
+  if (resolvedVideoUrl && isPlaying) {
     return (
       <video
         ref={videoRef}
@@ -77,7 +87,7 @@ export function MediaPreview({ alt, imageUrl, videoFilePath, showVideoByDefault 
     );
   }
 
-  if (videoUrl) {
+  if (resolvedVideoUrl) {
     return (
       <button
         type="button"

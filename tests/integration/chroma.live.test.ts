@@ -47,6 +47,7 @@ describeLive("Chroma live integration", () => {
         action_or_event: "monitoring",
         video_music: null,
         video_sound: null,
+        video_dialogue: null,
         video_action: null,
         primary_emotion: "anxiety",
         emotional_tone: "anxious",

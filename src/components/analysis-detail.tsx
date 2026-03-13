@@ -2,9 +2,13 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { AnalyzeUsageButton } from "@/src/components/analyze-usage-button";
 import { AssetStarButton } from "@/src/components/asset-star-button";
+import { MediaTweetComposer } from "@/src/components/media-tweet-composer";
 import { MediaPreview } from "@/src/components/media-preview";
+import { ReplyComposer } from "@/src/components/reply-composer";
 import { resolveMediaDisplayUrl } from "@/src/lib/media-display";
 import type { MediaAssetView, UsageAnalysis } from "@/src/lib/types";
+import { getPreferredXStatusUrl } from "@/src/lib/x-status-url";
+import { choosePromotableHlsMasterUrl, choosePromotableVideoUrl } from "@/src/server/media-asset-video";
 
 function formatDate(value: string | null | undefined): string {
   if (!value) {
@@ -56,9 +60,11 @@ interface UnifiedMatchItem {
   assetId: string;
   previewUrl: string | null;
   videoFilePath: string | null;
+  fallbackVideoUrl: string | null;
   postCount: number;
   similarityScore: number;
   distance: number | null;
+  starred: boolean;
 }
 
 interface MatchCardAction {
@@ -73,8 +79,11 @@ interface MatchCardAccordionItem {
 }
 
 function MatchCard(props: {
+  assetId: string;
   previewUrl: string | null;
   videoFilePath: string | null;
+  fallbackVideoUrl: string | null;
+  starred: boolean;
   titleChips: ReactNode[];
   bodyText?: string | null;
   actions: MatchCardAction[];
@@ -87,9 +96,26 @@ function MatchCard(props: {
     <article className="neon-card">
       {props.previewUrl ? (
         <div className="tt-media-frame mb-4 aspect-video">
-          <MediaPreview alt="related media preview" imageUrl={props.previewUrl} videoFilePath={props.videoFilePath} />
+          <MediaPreview
+            alt="related media preview"
+            imageUrl={props.previewUrl}
+            videoFilePath={props.videoFilePath}
+            videoUrl={props.fallbackVideoUrl}
+          />
+          <div className="absolute right-1.5 top-1.5 z-10">
+            <AssetStarButton
+              assetId={props.assetId}
+              starred={props.starred}
+              className={props.starred ? "tt-icon-button tt-icon-button-secondary bg-[#121826]/90" : "tt-icon-button bg-[#121826]/90"}
+              wrapperClassName="flex items-center"
+            />
+          </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="mb-4 flex justify-end">
+          <AssetStarButton assetId={props.assetId} starred={props.starred} wrapperClassName="flex items-center" />
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap gap-2">{props.titleChips}</div>
       {props.bodyText ? (
         <div className="tt-subpanel-soft">
@@ -140,6 +166,35 @@ export function AnalysisDetail(props: {
   };
   orderedFacets: Array<{ name: string; value: UsageAnalysis[keyof UsageAnalysis] }>;
   mediaAssetView: MediaAssetView | null;
+  relevantTopics: Array<{
+    id: string;
+    combinedScore: number;
+    topic: {
+      topicId: string | null;
+      label: string | null;
+      hotnessScore: number;
+      tweetCount: number;
+      isStale: boolean;
+    };
+    analysis: {
+      summaryLabel: string | null;
+      isNews: boolean;
+      newsPeg: string | null;
+      whyNow: string | null;
+      sentiment: "positive" | "negative" | "mixed" | "neutral";
+      stance: "supportive" | "critical" | "observational" | "celebratory" | "anxious" | "curious" | "mixed";
+      emotionalTone: string | null;
+      opinionIntensity: "low" | "medium" | "high";
+      targetEntity: string | null;
+      signals: string[];
+    };
+    tweet: {
+      tweetId: string | null;
+      authorUsername: string | null;
+      text: string | null;
+      createdAt: string | null;
+    };
+  }>;
 }) {
   const usageUrls = uniqueUrls([props.media.sourceUrl, props.media.posterUrl, props.media.previewUrl]);
   const assetSourceUrls = props.mediaAssetView?.asset.sourceUrls ?? [];
@@ -156,6 +211,10 @@ export function AnalysisDetail(props: {
     previewUrl: props.media.previewUrl,
     sourceUrl: props.media.sourceUrl
   });
+  const heroFallbackVideoUrl = props.mediaAssetView?.asset
+    ? choosePromotableVideoUrl(props.mediaAssetView.asset) ?? choosePromotableHlsMasterUrl(props.mediaAssetView.asset)
+    : null;
+  const tweetUrl = getPreferredXStatusUrl(props.tweet.tweetUrl);
   const exactMatches: UnifiedMatchItem[] = (props.mediaAssetView?.duplicateUsages ?? [])
     .filter((usage) => usage.usageId !== props.usageId)
     .map((usage) => ({
@@ -173,9 +232,14 @@ export function AnalysisDetail(props: {
         sourceUrl: props.mediaAssetView?.asset.canonicalMediaUrl ?? props.media.sourceUrl
       }),
       videoFilePath: props.mediaAssetView?.asset.promotedVideoFilePath ?? null,
+      fallbackVideoUrl:
+        props.mediaAssetView?.asset
+          ? choosePromotableVideoUrl(props.mediaAssetView.asset) ?? choosePromotableHlsMasterUrl(props.mediaAssetView.asset)
+          : null,
       postCount: props.mediaAssetView?.duplicateUsages.length ?? 0,
       similarityScore: 1,
-      distance: 0
+      distance: 0,
+      starred: props.mediaAssetView?.asset.starred ?? false
     })) ?? [];
   const similarMatches = new Map<string, UnifiedMatchItem>();
 
@@ -202,9 +266,11 @@ export function AnalysisDetail(props: {
         assetId: match.asset.assetId,
         previewUrl,
         videoFilePath: match.asset.promotedVideoFilePath,
+        fallbackVideoUrl: choosePromotableVideoUrl(match.asset) ?? choosePromotableHlsMasterUrl(match.asset),
         postCount: match.usages.length,
         similarityScore: match.similarityScore,
-        distance: match.distance
+        distance: match.distance,
+        starred: match.asset.starred
       });
     }
   }
@@ -221,6 +287,7 @@ export function AnalysisDetail(props: {
     return (right.createdAt ?? "").localeCompare(left.createdAt ?? "");
   });
   const duplicateCount = unifiedMatches.length;
+  const relevantTopics = props.relevantTopics.slice(0, 6);
 
   return (
     <main className="app-shell">
@@ -258,6 +325,7 @@ export function AnalysisDetail(props: {
                 alt={props.tweet.text ?? "tweet media"}
                 imageUrl={heroMediaUrl}
                 videoFilePath={props.mediaAssetView?.asset.promotedVideoFilePath ?? null}
+                videoUrl={heroFallbackVideoUrl}
                 showVideoByDefault
               />
             </div>
@@ -270,8 +338,8 @@ export function AnalysisDetail(props: {
               <div className="tt-subpanel">
                 <p className="text-sm leading-7 text-slate-200">{props.tweet.text ?? "No tweet text"}</p>
               </div>
-              {props.tweet.tweetUrl ? (
-                <a href={props.tweet.tweetUrl} target="_blank" rel="noreferrer" className="tt-link">
+              {tweetUrl ? (
+                <a href={tweetUrl} target="_blank" rel="noreferrer" className="tt-link">
                   <span>Open tweet</span>
                 </a>
               ) : null}
@@ -279,6 +347,103 @@ export function AnalysisDetail(props: {
           </div>
         </div>
       </section>
+
+      <ReplyComposer
+        usageId={props.usageId}
+        tweetId={props.tweetId}
+        subject={{
+          usageId: props.usageId,
+          tweetId: props.tweetId,
+          tweetUrl,
+          authorUsername: props.tweet.authorUsername,
+          createdAt: props.tweet.createdAt,
+          tweetText: props.tweet.text,
+          mediaKind: props.media.mediaKind,
+          analysis: {
+            captionBrief: props.orderedFacets.find((facet) => facet.name === "caption_brief")?.value as string | null,
+            sceneDescription: props.orderedFacets.find((facet) => facet.name === "scene_description")?.value as string | null,
+            primaryEmotion: props.orderedFacets.find((facet) => facet.name === "primary_emotion")?.value as string | null,
+            conveys: props.orderedFacets.find((facet) => facet.name === "conveys")?.value as string | null,
+            userIntent: props.orderedFacets.find((facet) => facet.name === "user_intent")?.value as string | null,
+            rhetoricalRole: props.orderedFacets.find((facet) => facet.name === "rhetorical_role")?.value as string | null,
+            textMediaRelationship: props.orderedFacets.find((facet) => facet.name === "text_media_relationship")?.value as string | null,
+            culturalReference: props.orderedFacets.find((facet) => facet.name === "cultural_reference")?.value as string | null,
+            analogyTarget: props.orderedFacets.find((facet) => facet.name === "analogy_target")?.value as string | null,
+            searchKeywords: (props.orderedFacets.find((facet) => facet.name === "search_keywords")?.value as string[] | null) ?? []
+          }
+        }}
+      />
+
+      <MediaTweetComposer
+        usageId={props.usageId}
+        assetId={props.mediaAssetView?.asset.assetId ?? null}
+        mediaKind={props.media.mediaKind}
+        mediaDisplayUrl={heroMediaUrl}
+        videoFilePath={props.mediaAssetView?.asset.promotedVideoFilePath ?? null}
+        tweetText={props.tweet.text}
+        analysis={{
+          conveys: props.orderedFacets.find((facet) => facet.name === "conveys")?.value as string | null,
+          primaryEmotion: props.orderedFacets.find((facet) => facet.name === "primary_emotion")?.value as string | null,
+          rhetoricalRole: props.orderedFacets.find((facet) => facet.name === "rhetorical_role")?.value as string | null
+        }}
+        relatedTopics={relevantTopics.map((topic) => ({
+          label: topic.topic.label ?? topic.analysis.summaryLabel ?? "Untitled topic",
+          hotnessScore: topic.topic.hotnessScore,
+          stance: topic.analysis.stance,
+          sentiment: topic.analysis.sentiment,
+          whyNow: topic.analysis.whyNow
+        }))}
+      />
+
+      {relevantTopics.length > 0 ? (
+        <section className="relative z-10 mb-8 terminal-panel">
+          <div className="panel-body">
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <div className="section-kicker">Relevant Topics</div>
+                <h2 className="section-title mt-3">How this media maps onto live discourse</h2>
+              </div>
+              <Link href="/topics" className="tt-link">
+                <span>Open topics</span>
+              </Link>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {relevantTopics.map((topic) => (
+                <article key={topic.id} className="tt-subpanel">
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <span className="tt-chip tt-chip-accent">{topic.topic.label ?? topic.analysis.summaryLabel ?? "Untitled topic"}</span>
+                    <span className="tt-chip">{topic.analysis.stance}</span>
+                    <span className="tt-chip">{topic.analysis.sentiment}</span>
+                    <span className="tt-chip">{topic.analysis.opinionIntensity} intensity</span>
+                    <span className="tt-chip">hotness {topic.topic.hotnessScore.toFixed(1)}</span>
+                    <span className="tt-chip">{topic.topic.tweetCount} tweets</span>
+                    {topic.topic.isStale ? <span className="tt-chip">stale</span> : null}
+                  </div>
+                  <div className="space-y-3 text-sm leading-7 text-slate-200">
+                    {topic.analysis.whyNow ? <p>{topic.analysis.whyNow}</p> : null}
+                    {topic.analysis.newsPeg ? <p className="text-muted">News peg: {topic.analysis.newsPeg}</p> : null}
+                    <p>{topic.tweet.text ?? "No tweet text"}</p>
+                    <div className="flex flex-wrap gap-2 text-xs uppercase tracking-[0.14em] text-cyan">
+                      {topic.analysis.targetEntity ? <span>target {topic.analysis.targetEntity}</span> : null}
+                      {topic.analysis.emotionalTone ? <span>tone {topic.analysis.emotionalTone}</span> : null}
+                      {topic.analysis.isNews ? <span>news</span> : null}
+                    </div>
+                    {topic.analysis.signals.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {topic.analysis.signals.slice(0, 4).map((signal) => (
+                          <span key={`${topic.id}-${signal}`} className="tt-chip">
+                            {signal}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="relative z-10 mb-8 terminal-panel">
         <div className="panel-body">
@@ -438,8 +603,11 @@ export function AnalysisDetail(props: {
                   {unifiedMatches.map((match) => (
                     <MatchCard
                       key={match.key}
+                      assetId={match.assetId}
                       previewUrl={match.previewUrl}
                       videoFilePath={match.videoFilePath}
+                      fallbackVideoUrl={match.fallbackVideoUrl}
+                      starred={match.starred}
                       titleChips={[
                         <span key="relationship" className={`tt-chip ${match.relationship === "exact" ? "tt-chip-accent" : ""}`}>
                           {match.relationship}
@@ -490,8 +658,11 @@ export function AnalysisDetail(props: {
                     return (
                       <MatchCard
                         key={`neighbor-${match.asset.assetId}`}
+                        assetId={match.asset.assetId}
                         previewUrl={previewUrl}
                         videoFilePath={match.asset.promotedVideoFilePath}
+                        fallbackVideoUrl={choosePromotableVideoUrl(match.asset) ?? choosePromotableHlsMasterUrl(match.asset)}
+                        starred={match.asset.starred}
                         titleChips={[
                           <span key="relationship" className="tt-chip">
                             nearest neighbor

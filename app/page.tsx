@@ -1,20 +1,28 @@
 import Link from "next/link";
 import { ControlPanel } from "@/src/components/control-panel";
+import { CapturedTweetQueue } from "@/src/components/captured-tweet-queue";
 import { FacetSearch } from "@/src/components/facet-search";
+import { ReplyMediaWishlist } from "@/src/components/reply-media-wishlist";
+import { TopicClusters } from "@/src/components/topic-clusters";
 import { UsageQueue } from "@/src/components/usage-queue";
 import { getDashboardData } from "@/src/server/data";
+import { getGroundedTopicNews, isGroundedTopicNewsEnabled } from "@/src/server/topic-grounded-news";
 
 function statLabel(value: number, singular: string, plural = `${singular}s`) {
   return `${value} ${value === 1 ? singular : plural}`;
 }
 
-export default function HomePage() {
+export default async function HomePage() {
   const data = getDashboardData();
+  const groundedNewsByTopicId = await getGroundedTopicNews(data.topicClusters);
   const latestManifest = data.manifests[0] ?? null;
   const completedCount = data.tweetUsages.filter((usage) => usage.analysis.status === "complete").length;
   const pendingCount = data.tweetUsages.length - completedCount;
   const phashMatchedUsageCount = data.tweetUsages.filter((usage) => usage.phashMatchCount > 0).length;
   const starredCount = data.tweetUsages.filter((usage) => usage.mediaAssetStarred).length;
+  const textOnlyTweetCount = data.capturedTweets.filter((entry) => !entry.hasMedia).length;
+  const tweetsWithMediaCount = data.capturedTweets.length - textOnlyTweetCount;
+  const freshTopicCount = data.topicClusters.filter((topic) => !topic.isStale).length;
 
   return (
     <main className="app-shell">
@@ -30,8 +38,20 @@ export default function HomePage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
+            <Link href="/tweets" className="tt-button">
+              <span>Tweets</span>
+            </Link>
             <Link href="/matches" className="tt-button">
               <span>Matches</span>
+            </Link>
+            <Link href="/wishlist" className="tt-button">
+              <span>Wishlist</span>
+            </Link>
+            <Link href="/drafts" className="tt-button">
+              <span>Drafts</span>
+            </Link>
+            <Link href="/topics" className="tt-button">
+              <span>Topics</span>
             </Link>
             <a href="#run-control" className="tt-link">
               <span>Run Control</span>
@@ -61,6 +81,18 @@ export default function HomePage() {
                   <a href="#usage-queue" className="tt-link">
                     <span>Review queue</span>
                   </a>
+                  <Link href="/tweets" className="tt-link">
+                    <span>Browse tweets</span>
+                  </Link>
+                  <Link href="/wishlist" className="tt-link">
+                    <span>Open wishlist</span>
+                  </Link>
+                  <Link href="/drafts" className="tt-link">
+                    <span>Open drafts</span>
+                  </Link>
+                  <Link href="/topics" className="tt-link">
+                    <span>Open topics</span>
+                  </Link>
                   <Link href="/matches" className="tt-link">
                     <span>Open match explorer</span>
                   </Link>
@@ -88,7 +120,7 @@ export default function HomePage() {
 
             <div className="dashboard-stat-grid">
               <div className="metric-card">
-                <div className="tt-data-label">Pending</div>
+                <div className="tt-data-label">Pending Media</div>
                 <div className="mt-3 font-[family:var(--font-heading)] text-3xl font-black uppercase tracking-[0.08em] text-accent">
                   {pendingCount}
                 </div>
@@ -115,6 +147,20 @@ export default function HomePage() {
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate-300">Assets flagged for follow-up.</p>
               </div>
+              <div className="metric-card">
+                <div className="tt-data-label">Text-Only Tweets</div>
+                <div className="mt-3 font-[family:var(--font-heading)] text-3xl font-black uppercase tracking-[0.08em] text-orange">
+                  {textOnlyTweetCount}
+                </div>
+                <p className="mt-2 text-sm leading-6 text-slate-300">Saved from crawl, excluded from media analysis.</p>
+              </div>
+              <div className="metric-card">
+                <div className="tt-data-label">Fresh Topics</div>
+                <div className="mt-3 font-[family:var(--font-heading)] text-3xl font-black uppercase tracking-[0.08em] text-lime-300">
+                  {freshTopicCount}
+                </div>
+                <p className="mt-2 text-sm leading-6 text-slate-300">Clusters still worth posting into.</p>
+              </div>
             </div>
           </div>
 
@@ -126,7 +172,7 @@ export default function HomePage() {
                   {latestManifest?.runId ?? "none"}
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate-300">
-                  {data.totalTweetCount} tweets indexed across {data.manifests.length} cached runs.
+                  {data.totalTweetCount} tweets indexed across {data.manifests.length} cached runs. {tweetsWithMediaCount} include media.
                 </p>
               </div>
               <div className="tt-subpanel-soft">
@@ -150,9 +196,22 @@ export default function HomePage() {
         <UsageQueue usages={data.tweetUsages} />
       </div>
 
+      <TopicClusters
+        topics={data.topicClusters.map((topic) => ({
+          ...topic,
+          groundedNews: groundedNewsByTopicId.get(topic.topicId) ?? null
+        }))}
+        groundedNewsEnabled={isGroundedTopicNewsEnabled()}
+        draftTopicBasePath="/topics"
+      />
+
+      <CapturedTweetQueue tweets={data.capturedTweets} />
+
       <div id="facet-search">
         <FacetSearch />
       </div>
+
+      <ReplyMediaWishlist entries={data.replyMediaWishlist} />
 
       <section className="relative z-10 mb-8 terminal-panel">
         <div className="panel-body">

@@ -45,6 +45,34 @@ Use this when you know what kind of change you need to make but not where to sta
 2. Distinguish lexical fallback behavior from vector behavior before changing ranking.
 3. Verify the UI in [`src/components/facet-search.tsx`](/Users/nicklocascio/Projects/twitter-trend/src/components/facet-search.tsx).
 
+## Change Reply Composition
+
+1. Start in [`src/server/reply-composer.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/reply-composer.ts) to understand the orchestration order.
+2. Update prompt wording in [`src/server/reply-composer-prompt.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/reply-composer-prompt.ts) before changing adapter behavior.
+3. Keep model-specific behavior behind [`src/server/reply-composer-model.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/reply-composer-model.ts).
+4. Keep retrieval-specific behavior behind [`src/server/reply-media-search.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/reply-media-search.ts).
+5. Verify the UI in [`src/components/reply-composer.tsx`](/Users/nicklocascio/Projects/twitter-trend/src/components/reply-composer.tsx), including streamed progress and `all_goals` compare mode.
+6. If wishlist behavior changed, also verify [`src/components/reply-media-wishlist.tsx`](/Users/nicklocascio/Projects/twitter-trend/src/components/reply-media-wishlist.tsx) and [`src/cli/reply-media-wishlist.ts`](/Users/nicklocascio/Projects/twitter-trend/src/cli/reply-media-wishlist.ts).
+7. If meming.world import behavior changed, verify [`src/server/meme-template-import.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/meme-template-import.ts), [`src/server/meming-world.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/meming-world.ts), and the import route/CLI.
+8. Run the reply-composer and wishlist unit tests.
+
+## Change Topic-To-Tweet Composition
+
+1. Start in [`src/server/topic-composer.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/topic-composer.ts) to understand the orchestration order.
+2. Update prompt wording in [`src/server/topic-composer-prompt.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/topic-composer-prompt.ts) before changing adapter behavior.
+3. Keep model-specific behavior behind [`src/server/topic-composer-model.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/topic-composer-model.ts).
+4. Keep retrieval-specific behavior behind [`src/server/reply-media-search.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/reply-media-search.ts) unless the search provider boundary itself needs to change.
+5. Verify the UI in [`src/components/topic-tweet-composer.tsx`](/Users/nicklocascio/Projects/twitter-trend/src/components/topic-tweet-composer.tsx), including streamed progress, selected-goal behavior, and `all_goals` compare mode.
+6. If topic context or grounded-news use changed, also verify [`app/topics/page.tsx`](/Users/nicklocascio/Projects/twitter-trend/app/topics/page.tsx) and [`src/server/topic-grounded-news.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/topic-grounded-news.ts).
+
+## Change Media-To-Tweet Composition
+
+1. Start in [`src/server/media-post-composer.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/media-post-composer.ts) to understand how usage detail is turned into a drafting subject.
+2. Update prompt wording in [`src/server/media-post-composer-prompt.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/media-post-composer-prompt.ts) before changing model behavior.
+3. Keep model-specific behavior behind [`src/server/media-post-composer-model.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/media-post-composer-model.ts).
+4. If you change the subject context, verify [`src/server/usage-details.ts`](/Users/nicklocascio/Projects/twitter-trend/src/server/usage-details.ts) so the composer still sees the right asset, topic, and prior-usage information.
+5. Verify the UI in [`src/components/media-tweet-composer.tsx`](/Users/nicklocascio/Projects/twitter-trend/src/components/media-tweet-composer.tsx), including streamed progress and fixed-asset rendering.
+
 ## Safe Editing Sequence
 
 1. Read the producing module.
@@ -52,3 +80,4 @@ Use this when you know what kind of change you need to make but not where to sta
 3. Read the main consumer.
 4. Update the narrowest layer possible.
 5. Run the smallest relevant test suite.
+6. Do a pre-submit `stop-slop` pass using [`/.agents/skills/stop-slop/SKILL.md`](/Users/nicklocascio/Projects/twitter-trend/.agents/skills/stop-slop/SKILL.md): tighten copy, trim weak abstractions, verify visible loading/error states, and remove generic UI or prompt wording.

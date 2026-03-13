@@ -30,6 +30,7 @@ const COMMON_FACET_PRESETS: Record<string, string[]> = {
   text_media_relationship: ["reinforces text", "contrasts text", "visual proof", "reframes claim", "literal illustration"],
   video_music: ["dramatic score", "upbeat music", "no music", "ambient soundtrack", "unclear audio"],
   video_sound: ["dialogue", "ambient room noise", "crowd noise", "sound effects", "silence"],
+  video_dialogue: ["what is said", "spoken line", "quote from clip", "dialogue transcript", "unclear speech"],
   video_action: ["talking to camera", "screen recording walkthrough", "fast cuts", "crowd reaction", "product demo motion"],
   metaphor: ["human vs machine", "signal vs noise", "speed as power", "light as information", "agency as company"],
   humor_mechanism: ["irony", "absurdity", "juxtaposition", "deadpan", "exaggeration"],

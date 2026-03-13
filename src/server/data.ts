@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { DesiredReplyMediaWishlistEntry } from "@/src/lib/reply-composer";
 import { buildUsageId } from "@/src/lib/usage-id";
 import type {
+  CapturedTweetRecord,
   CrawlManifest,
   ExtractedTweet,
   MediaAssetRecord,
+  TopicClusterRecord,
+  TopicIndex,
   RunHistoryEntry,
   SchedulerConfig,
   TweetUsageRecord,
@@ -14,13 +18,19 @@ import { readRunHistory, readSchedulerConfig } from "@/src/server/run-control";
 import { readAllUsageAnalyses } from "@/src/server/analysis-store";
 import { buildDuplicateGroupMap, buildPhashMatchMap, readMediaAssetIndex } from "@/src/server/media-assets";
 import { materializeUsageAnalysisFromAssetVideo, readAllAssetVideoAnalyses } from "@/src/server/media-asset-video";
+import { readReplyMediaWishlist } from "@/src/server/reply-media-wishlist";
+import { emptyTopicIndex, readTopicIndex } from "@/src/server/tweet-topics";
 
 export interface DashboardData {
   manifests: CrawlManifest[];
   schedulerConfig: SchedulerConfig;
   runHistory: RunHistoryEntry[];
   totalTweetCount: number;
+  capturedTweets: CapturedTweetRecord[];
   tweetUsages: TweetUsageRecord[];
+  topicIndex: TopicIndex;
+  topicClusters: TopicClusterRecord[];
+  replyMediaWishlist: DesiredReplyMediaWishlistEntry[];
 }
 
 const projectRoot = process.cwd();
@@ -34,6 +44,10 @@ function readJsonFile<T>(filePath: string): T | null {
   }
 
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+}
+
+function buildTweetKey(tweet: ExtractedTweet): string {
+  return tweet.tweetId ?? `${tweet.sourceName}:${tweet.authorUsername ?? "unknown"}:${tweet.text ?? ""}`;
 }
 
 function loadCrawlManifests(): CrawlManifest[] {
@@ -83,6 +97,7 @@ function buildPendingAnalyses(tweets: ExtractedTweet[]): DashboardData["tweetUsa
           action_or_event: null,
           video_music: null,
           video_sound: null,
+          video_dialogue: null,
           video_action: null,
           primary_emotion: null,
           emotional_tone: null,
@@ -121,6 +136,38 @@ function buildPendingAnalyses(tweets: ExtractedTweet[]): DashboardData["tweetUsa
       };
     })
   );
+}
+
+export function buildCapturedTweetRecords(input: {
+  tweets: ExtractedTweet[];
+  analysisMap: Map<string, UsageAnalysis>;
+  usageToAssetIdMap?: Map<string, string>;
+  assetStarredMap?: Map<string, boolean>;
+  topicLabelsByTweetKey?: Map<string, string[]>;
+  topTopicByTweetKey?: Map<string, { label: string | null; hotnessScore: number }>;
+}): CapturedTweetRecord[] {
+  return input.tweets.map((tweet) => {
+    const firstUsageId = tweet.media[0] ? buildUsageId(tweet, 0) : null;
+    const firstMediaAssetId = firstUsageId ? input.usageToAssetIdMap?.get(firstUsageId) ?? null : null;
+    const tweetKey = buildTweetKey(tweet);
+    const topTopic = input.topTopicByTweetKey?.get(tweetKey);
+
+    return {
+      tweetKey,
+      tweet,
+      hasMedia: tweet.media.length > 0,
+      mediaCount: tweet.media.length,
+      analyzedMediaCount: tweet.media.reduce((count, _media, mediaIndex) => {
+        const usageId = buildUsageId(tweet, mediaIndex);
+        return count + (input.analysisMap.get(usageId)?.status === "complete" ? 1 : 0);
+      }, 0),
+      firstMediaAssetId,
+      firstMediaAssetStarred: firstMediaAssetId ? input.assetStarredMap?.get(firstMediaAssetId) ?? false : false,
+      topicLabels: input.topicLabelsByTweetKey?.get(tweetKey) ?? [],
+      topTopicLabel: topTopic?.label ?? null,
+      topTopicHotnessScore: topTopic?.hotnessScore ?? 0
+    };
+  });
 }
 
 function buildAssetUsageCountMap(assets: MediaAssetRecord[] | undefined): Map<string, number> {
@@ -226,6 +273,7 @@ export function getDashboardData(): DashboardData {
   const manifests = loadCrawlManifests();
   const schedulerConfig = readSchedulerConfig();
   const runHistory = readRunHistory();
+  const replyMediaWishlist = readReplyMediaWishlist();
   const savedAnalyses = readAllUsageAnalyses();
   const assetVideoAnalyses = readAllAssetVideoAnalyses();
   const assetIndex = readMediaAssetIndex();
@@ -237,10 +285,7 @@ export function getDashboardData(): DashboardData {
   );
   const mergedTweets = manifests.flatMap((manifest) => manifest.capturedTweets);
   const tweetMap = new Map(
-    mergedTweets.map((tweet) => [
-      tweet.tweetId ?? `${tweet.sourceName}:${tweet.authorUsername ?? "unknown"}:${tweet.text ?? ""}`,
-      tweet
-    ])
+    mergedTweets.map((tweet) => [buildTweetKey(tweet), tweet])
   );
   const sourceTweets = Array.from(tweetMap.values());
   const tweetUsages = buildPendingAnalyses(sourceTweets).map((usage) => {
@@ -265,6 +310,7 @@ export function getDashboardData(): DashboardData {
   const assetLocalFilePathMap = new Map((assetIndex?.assets ?? []).map((asset) => [asset.assetId, asset.canonicalFilePath]));
   const assetPlayableFilePathMap = new Map((assetIndex?.assets ?? []).map((asset) => [asset.assetId, asset.promotedVideoFilePath]));
   const assetStarredMap = new Map((assetIndex?.assets ?? []).map((asset) => [asset.assetId, asset.starred]));
+  const usageToAssetIdMap = new Map(Object.entries(assetIndex?.usageToAssetId ?? {}));
   const phashMatchMap = assetIndex ? buildPhashMatchMap({ assets: assetIndex.assets, usages: tweetUsages }) : {};
   const duplicateGroupMap = assetIndex ? buildDuplicateGroupMap({ assets: assetIndex.assets, usages: tweetUsages }) : {};
   const hotnessScoreByUsageId = buildHotnessScoreByUsageId({
@@ -286,12 +332,44 @@ export function getDashboardData(): DashboardData {
       hotnessScore: hotnessScoreByUsageId.get(usage.usageId) ?? 0
     };
   });
+  const topicIndex = readTopicIndex() ?? emptyTopicIndex(sourceTweets.length);
+  const topicLabelById = new Map(topicIndex.topics.map((topic) => [topic.topicId, topic.label]));
+  const topicLabelsByTweetKey = new Map(
+    topicIndex.tweets.map((tweet) => [
+      tweet.tweetKey,
+      tweet.topicIds
+        .map((topicId) => topicLabelById.get(topicId) ?? null)
+        .filter((value): value is string => Boolean(value))
+        .slice(0, 4)
+    ])
+  );
+  const topTopicByTweetKey = new Map(
+    topicIndex.tweets.map((tweet) => [
+      tweet.tweetKey,
+      {
+        label: tweet.topTopicLabel,
+        hotnessScore: tweet.topTopicHotnessScore
+      }
+    ])
+  );
+  const capturedTweets = buildCapturedTweetRecords({
+    tweets: sourceTweets,
+    analysisMap,
+    usageToAssetIdMap,
+    assetStarredMap,
+    topicLabelsByTweetKey,
+    topTopicByTweetKey
+  });
 
   return {
     manifests,
     schedulerConfig,
     runHistory,
     totalTweetCount: sourceTweets.length,
-    tweetUsages: enrichedUsages
+    capturedTweets,
+    tweetUsages: enrichedUsages,
+    topicIndex,
+    topicClusters: topicIndex.topics,
+    replyMediaWishlist
   };
 }

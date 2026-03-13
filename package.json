@@ -1,8 +1,23 @@
 {
   "name": "twitter-trend",
   "version": "0.1.0",
-  "private": true,
   "description": "Local-first pipeline for capturing X timeline media and indexing usage semantics.",
+  "license": "UNLICENSED",
+  "bin": {
+    "x-media-analyst": "./bin/x-media-analyst.mjs"
+  },
+  "files": [
+    "README.md",
+    "bin/",
+    "app/",
+    "src/",
+    "next.config.ts",
+    "next-env.d.ts",
+    "postcss.config.mjs",
+    "eslint.config.mjs",
+    "schema.sql",
+    "tsconfig.json"
+  ],
   "scripts": {
     "dev": "next dev -p 4105",
     "build": "next build",
@@ -10,12 +25,17 @@
     "crawl:timeline": "tsx src/cli/crawl-timeline.ts",
     "crawl:openclaw": "tsx src/cli/crawl-openclaw.ts",
     "capture:openclaw-current": "tsx src/cli/capture-openclaw-current.ts",
+    "capture:openclaw-current-tweet": "tsx src/cli/capture-openclaw-current-tweet.ts",
+    "capture:openclaw-current-tweet-and-compose-replies": "tsx src/cli/capture-openclaw-current-tweet-and-compose-replies.ts",
     "media:rebuild": "tsx src/cli/rebuild-media-assets.ts",
     "media:backfill-native-types": "tsx src/cli/backfill-media-native-types.ts",
     "analyze:tweet": "tsx src/cli/analyze-tweet.ts",
     "analyze:image-prompt": "tsx src/cli/analyze-image-prompt.ts",
+    "analyze:all": "tsx src/cli/analyze-all.ts",
     "analyze:missing": "tsx src/cli/analyze-missing.ts",
+    "analyze:topics": "tsx src/cli/analyze-topics.ts",
     "search:facets": "tsx src/cli/search-facets.ts",
+    "search:topics": "tsx src/cli/search-topics.ts",
     "scheduler": "tsx src/cli/scheduler.ts",
     "stack": "tsx src/cli/run-stack.ts",
     "test": "vitest run tests/unit",

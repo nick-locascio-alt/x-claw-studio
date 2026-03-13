@@ -4,7 +4,7 @@ import { mergeExistingMediaAssetState, shouldPromoteMediaAssetVideo, summarizeAn
 import type { MediaAssetRecord, UsageAnalysis } from "@/src/lib/types";
 
 function buildAnalysis(overrides: Partial<UsageAnalysis>): UsageAnalysis {
-  return {
+  const analysis: UsageAnalysis = {
     usageId: "usage-1",
     tweetId: "tweet-1",
     mediaIndex: 0,
@@ -28,6 +28,7 @@ function buildAnalysis(overrides: Partial<UsageAnalysis>): UsageAnalysis {
     action_or_event: null,
     video_music: null,
     video_sound: null,
+    video_dialogue: null,
     video_action: null,
     primary_emotion: null,
     emotional_tone: null,
@@ -54,6 +55,11 @@ function buildAnalysis(overrides: Partial<UsageAnalysis>): UsageAnalysis {
     confidence_notes: null,
     usage_notes: null,
     ...overrides
+  };
+
+  return {
+    ...analysis,
+    video_dialogue: analysis.video_dialogue ?? null
   };
 }
 

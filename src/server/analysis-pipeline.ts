@@ -4,7 +4,7 @@ import { writeUsageAnalysis } from "@/src/server/analysis-store";
 import { indexUsageAnalysisInChroma } from "@/src/server/chroma-facets";
 import { buildMediaAssetSummaries, readMediaAssetIndex } from "@/src/server/media-assets";
 import { getDashboardData } from "@/src/server/data";
-import { analyzeMediaAssetVideo } from "@/src/server/media-asset-video";
+import { analyzeMediaAssetVideo, assertVideoWithinAnalysisLimit } from "@/src/server/media-asset-video";
 import { findTweetUsage } from "@/src/server/tweet-repository";
 import path from "node:path";
 
@@ -25,6 +25,7 @@ export async function analyzeAndIndexTweetUsage(tweetId: string, mediaIndex = 0)
   const dashboardUsage = getDashboardData().tweetUsages.find((entry) => entry.usageId === usageId) ?? null;
 
   if (asset && promotedVideoPath) {
+    await assertVideoWithinAnalysisLimit(promotedVideoPath, `usage video ${usageId}`);
     await analyzeMediaAssetVideo(asset, dashboardUsage);
   }
 

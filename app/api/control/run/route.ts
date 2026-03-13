@@ -10,6 +10,7 @@ export async function POST(request: Request) {
     openclawTargetTabIndex?: number | null;
     openclawKeepScrollPosition?: boolean;
     openclawStartUrl?: string | null;
+    topicBatchLimit?: number | null;
   };
   const task = body.task;
   const openclawTargetTabIndex =
@@ -18,12 +19,19 @@ export async function POST(request: Request) {
       : null;
   const openclawKeepScrollPosition = body.openclawKeepScrollPosition === true;
   const openclawStartUrl = body.openclawStartUrl ? normalizeXStatusUrl(body.openclawStartUrl) : null;
+  const topicBatchLimit =
+    typeof body.topicBatchLimit === "number" && Number.isInteger(body.topicBatchLimit) && body.topicBatchLimit > 0
+      ? body.topicBatchLimit
+      : null;
 
   if (
     task !== "crawl_timeline" &&
     task !== "crawl_openclaw" &&
     task !== "capture_openclaw_current" &&
+    task !== "capture_openclaw_current_tweet" &&
+    task !== "capture_openclaw_current_tweet_and_compose_replies" &&
     task !== "analyze_missing" &&
+    task !== "analyze_topics" &&
     task !== "rebuild_media_assets" &&
     task !== "backfill_media_native_types"
   ) {
@@ -34,7 +42,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "OpenClaw start URL must be a single tweet status URL on x.com or twitter.com" }, { status: 400 });
   }
 
-  if ((task === "crawl_openclaw" || task === "capture_openclaw_current") && openclawTargetTabIndex !== null) {
+  if (
+    (
+      task === "crawl_openclaw" ||
+      task === "capture_openclaw_current" ||
+      task === "capture_openclaw_current_tweet" ||
+      task === "capture_openclaw_current_tweet_and_compose_replies"
+    ) &&
+    openclawTargetTabIndex !== null
+  ) {
     const health = await verifyOpenClawTabHealth(openclawTargetTabIndex);
     if (!health.ok) {
       return NextResponse.json(
@@ -46,6 +62,11 @@ export async function POST(request: Request) {
     }
   }
 
-  const entry = triggerTask(task, "manual", { openclawTargetTabIndex, openclawKeepScrollPosition, openclawStartUrl });
+  const entry = triggerTask(task, "manual", {
+    openclawTargetTabIndex,
+    openclawKeepScrollPosition,
+    openclawStartUrl,
+    topicBatchLimit
+  });
   return NextResponse.json(entry);
 }

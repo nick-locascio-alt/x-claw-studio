@@ -25,6 +25,7 @@ const analysisMaxRetries = Number(process.env.GEMINI_ANALYSIS_MAX_RETRIES || 4);
 const analysisRetryBaseDelayMs = Number(process.env.GEMINI_ANALYSIS_RETRY_BASE_DELAY_MS || 5000);
 const analysisRetryMaxDelayMs = Number(process.env.GEMINI_ANALYSIS_RETRY_MAX_DELAY_MS || 45000);
 const MIN_PROMOTED_VIDEO_BYTES = 4096;
+const MAX_ANALYZABLE_VIDEO_DURATION_SECONDS = 5 * 60;
 const HLS_MASTER_MIME = "application/x-mpegURL";
 
 interface HlsStreamVariant {
@@ -72,6 +73,48 @@ function computeRetryDelayMs(attempt: number): number {
   );
   const jitter = Math.round(backoff * (0.2 + Math.random() * 0.3));
   return Math.min(analysisRetryMaxDelayMs, backoff + jitter);
+}
+
+export function parseFfmpegDurationSeconds(output: string): number | null {
+  const match = output.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3]);
+  if (![hours, minutes, seconds].every(Number.isFinite)) {
+    return null;
+  }
+
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+export async function getLocalVideoDurationSeconds(filePath: string): Promise<number | null> {
+  if (!ffmpegPath) {
+    return null;
+  }
+
+  try {
+    await execFileAsync(ffmpegPath, ["-i", filePath], {
+      env: process.env
+    });
+    return null;
+  } catch (error) {
+    const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "") : "";
+    const stdout = error && typeof error === "object" && "stdout" in error ? String(error.stdout ?? "") : "";
+    return parseFfmpegDurationSeconds(`${stdout}\n${stderr}`);
+  }
+}
+
+export async function assertVideoWithinAnalysisLimit(filePath: string, label: string): Promise<void> {
+  const durationSeconds = await getLocalVideoDurationSeconds(filePath);
+  if (durationSeconds !== null && durationSeconds > MAX_ANALYZABLE_VIDEO_DURATION_SECONDS) {
+    throw new Error(
+      `Refusing to analyze ${label}: duration ${durationSeconds.toFixed(1)}s exceeds ${MAX_ANALYZABLE_VIDEO_DURATION_SECONDS}s limit`
+    );
+  }
 }
 
 function getAssetVideoAnalysisPath(assetId: string): string {
@@ -156,6 +199,20 @@ export function choosePromotableHlsMasterUrl(asset: MediaAssetRecord): string | 
         !/\/pl\/mp4a\//.test(url)
     ) ?? null
   );
+}
+
+export function listPromotableVideoSources(asset: MediaAssetRecord): string[] {
+  const candidates = [
+    asset.promotedVideoSourceUrl &&
+    (choosePromotableVideoUrl({ ...asset, sourceUrls: [asset.promotedVideoSourceUrl] }) ||
+      choosePromotableHlsMasterUrl({ ...asset, sourceUrls: [asset.promotedVideoSourceUrl] }))
+      ? asset.promotedVideoSourceUrl
+      : null,
+    choosePromotableVideoUrl(asset),
+    choosePromotableHlsMasterUrl(asset)
+  ];
+
+  return Array.from(new Set(candidates.filter((value): value is string => Boolean(value))));
 }
 
 function parseAttributeMap(line: string): Record<string, string> {
@@ -439,15 +496,8 @@ export async function promoteMediaAssetVideo(asset: MediaAssetRecord): Promise<M
     return asset;
   }
 
-  const chosenPromotedVideoUrl = choosePromotableVideoUrl(asset);
-  const chosenHlsMasterUrl = choosePromotableHlsMasterUrl(asset);
-  const promotedVideoSourceUrl =
-    asset.promotedVideoSourceUrl &&
-    (choosePromotableVideoUrl({ ...asset, sourceUrls: [asset.promotedVideoSourceUrl] }) ||
-      choosePromotableHlsMasterUrl({ ...asset, sourceUrls: [asset.promotedVideoSourceUrl] }))
-      ? asset.promotedVideoSourceUrl
-      : chosenPromotedVideoUrl ?? chosenHlsMasterUrl;
-  if (!promotedVideoSourceUrl) {
+  const promotableSources = listPromotableVideoSources(asset);
+  if (promotableSources.length === 0) {
     return asset;
   }
 
@@ -455,38 +505,57 @@ export async function promoteMediaAssetVideo(asset: MediaAssetRecord): Promise<M
     asset.promotedVideoFilePath && isValidPromotedVideoFile(path.join(projectRoot, asset.promotedVideoFilePath))
       ? asset.promotedVideoFilePath
       : null;
-  let promotedVideoFilePath = existingVideoFilePath;
+  if (existingVideoFilePath) {
+    return {
+      ...asset,
+      promotedVideoSourceUrl: asset.promotedVideoSourceUrl ?? promotableSources[0],
+      promotedVideoFilePath: existingVideoFilePath
+    };
+  }
 
-  if (!promotedVideoFilePath) {
-    const shouldUseHls =
-      promotedVideoSourceUrl.includes(".m3u8") ||
-      ((await fetch(promotedVideoSourceUrl, { method: "HEAD" })).headers.get("content-type") ?? "")
-        .toLowerCase()
-        .includes(HLS_MASTER_MIME.toLowerCase());
+  let lastError: unknown = null;
 
-    if (shouldUseHls) {
-      const playlistRelativePath = await downloadHlsPlaylistBundle(asset, promotedVideoSourceUrl);
-      const remuxedVideoRelativePath = await remuxHlsBundleToMp4({
-        assetId: asset.assetId,
-        playlistRelativePath
-      });
+  for (const promotedVideoSourceUrl of promotableSources) {
+    try {
+      const shouldUseHls =
+        promotedVideoSourceUrl.includes(".m3u8") ||
+        ((await fetch(promotedVideoSourceUrl, { method: "HEAD" })).headers.get("content-type") ?? "")
+          .toLowerCase()
+          .includes(HLS_MASTER_MIME.toLowerCase());
 
-      if (remuxedVideoRelativePath) {
-        removeTemporaryHlsBundle(playlistRelativePath);
-        promotedVideoFilePath = remuxedVideoRelativePath;
+      let promotedVideoFilePath: string;
+      if (shouldUseHls) {
+        const playlistRelativePath = await downloadHlsPlaylistBundle(asset, promotedVideoSourceUrl);
+        const remuxedVideoRelativePath = await remuxHlsBundleToMp4({
+          assetId: asset.assetId,
+          playlistRelativePath
+        });
+
+        if (remuxedVideoRelativePath) {
+          removeTemporaryHlsBundle(playlistRelativePath);
+          promotedVideoFilePath = remuxedVideoRelativePath;
+        } else {
+          promotedVideoFilePath = playlistRelativePath;
+        }
       } else {
-        promotedVideoFilePath = playlistRelativePath;
+        promotedVideoFilePath = await downloadPromotedVideo(asset, promotedVideoSourceUrl);
       }
-    } else {
-      promotedVideoFilePath = await downloadPromotedVideo(asset, promotedVideoSourceUrl);
+
+      return {
+        ...asset,
+        promotedVideoSourceUrl,
+        promotedVideoFilePath
+      };
+    } catch (error) {
+      lastError = error;
     }
   }
 
-  return {
-    ...asset,
-    promotedVideoSourceUrl,
-    promotedVideoFilePath
-  };
+  if (lastError) {
+    throw lastError;
+  }
+
+  return asset;
 }
 
 export async function analyzeMediaAssetVideo(
@@ -501,6 +570,9 @@ export async function analyzeMediaAssetVideo(
     return null;
   }
 
+  const absoluteVideoPath = path.join(projectRoot, asset.promotedVideoFilePath);
+  await assertVideoWithinAnalysisLimit(absoluteVideoPath, `asset video ${asset.assetId}`);
+
   const existing = readAssetVideoAnalysis(asset.assetId);
   if (existing?.status === "complete") {
     return existing;
@@ -508,7 +580,7 @@ export async function analyzeMediaAssetVideo(
 
   const apiKey = getGeminiApiKey();
   const ai = new GoogleGenAI({ apiKey });
-  const mediaPart = await loadMediaAsBase64(path.join(projectRoot, asset.promotedVideoFilePath));
+  const mediaPart = await loadMediaAsBase64(absoluteVideoPath);
   let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
 
   for (let attempt = 1; attempt <= analysisMaxRetries + 1; attempt += 1) {

@@ -1,17 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TweetUsageRecord, UsageAnalysis } from "@/src/lib/types";
+import type { TopicClusterRecord, TweetTopicAnalysisRecord, TweetUsageRecord, UsageAnalysis } from "@/src/lib/types";
 
 const mockUsages: TweetUsageRecord[] = [];
 const mockAnalyses: UsageAnalysis[] = [];
+const mockTopicAnalyses: TweetTopicAnalysisRecord[] = [];
+const mockTopicClusters: TopicClusterRecord[] = [];
 
 vi.mock("@/src/server/data", () => ({
   getDashboardData: () => ({
-    tweetUsages: mockUsages
+    tweetUsages: mockUsages,
+    topicClusters: mockTopicClusters
   })
 }));
 
 vi.mock("@/src/server/analysis-store", () => ({
   readAllUsageAnalyses: () => mockAnalyses
+}));
+
+vi.mock("@/src/server/topic-analysis-store", () => ({
+  readAllTopicAnalyses: () => mockTopicAnalyses
 }));
 
 vi.mock("chromadb", () => ({
@@ -76,6 +83,7 @@ function createAnalysis(index: number): UsageAnalysis {
     action_or_event: "monitoring",
     video_music: null,
     video_sound: null,
+    video_dialogue: null,
     video_action: null,
     primary_emotion: "focus",
     emotional_tone: "analytical",
@@ -141,6 +149,8 @@ describe("searchFacetIndex", () => {
   beforeEach(() => {
     mockUsages.length = 0;
     mockAnalyses.length = 0;
+    mockTopicAnalyses.length = 0;
+    mockTopicClusters.length = 0;
   });
 
   it("uses enriched lexical documents beyond raw facet values", async () => {
@@ -157,6 +167,12 @@ describe("searchFacetIndex", () => {
     expect(result.results).toHaveLength(1);
     expect(result.results[0]?.document).toContain("tweet_text: Terminal dashboard screenshot 1");
     expect(result.results[0]?.document).toContain("search_keywords: dashboard, terminal");
+    expect(result.results[0]?.metadata).toMatchObject({
+      facet_name: "conveys",
+      facet_value: "signal-1",
+      facet_description: expect.any(String),
+      media_index: 0
+    });
   });
 
   it("defaults to 20 results when no limit is provided", async () => {
@@ -174,5 +190,93 @@ describe("searchFacetIndex", () => {
 
     expect(result.limit).toBe(20);
     expect(result.results).toHaveLength(20);
+  });
+});
+
+describe("searchTopicIndex", () => {
+  beforeEach(() => {
+    mockUsages.length = 0;
+    mockAnalyses.length = 0;
+    mockTopicAnalyses.length = 0;
+    mockTopicClusters.length = 0;
+  });
+
+  it("searches topic documents with topic posture and usage facets in the haystack", async () => {
+    const usage = createUsage(1);
+    usage.analysis.conveys = "AI coding tool consolidation";
+    usage.analysis.brand_signals = ["Cursor", "OpenAI"];
+    usage.analysis.search_keywords = ["agentic coding", "IDE replacement"];
+    mockUsages.push(usage);
+    mockAnalyses.push(usage.analysis);
+    mockTopicAnalyses.push({
+      analysisId: "topic-1",
+      tweetKey: usage.tweet.tweetId ?? "tweet-1",
+      tweetId: usage.tweet.tweetId,
+      authorUsername: usage.tweet.authorUsername,
+      createdAt: usage.tweet.createdAt,
+      text: "Cursor is getting squeezed as agentic coding tools collapse into one stack.",
+      usageIds: [usage.usageId],
+      summaryLabel: "Agentic Coding Tool Consolidation",
+      isNews: true,
+      newsPeg: "AI coding suite bundling",
+      whyNow: "Product lines are collapsing into broader AI coding platforms.",
+      sentiment: "mixed",
+      stance: "observational",
+      emotionalTone: "analytical",
+      opinionIntensity: "medium",
+      targetEntity: "Cursor",
+      confidence: 0.88,
+      signals: [
+        {
+          key: "phrase:agentic coding tool consolidation",
+          label: "Agentic Coding Tool Consolidation",
+          kind: "phrase",
+          source: "llm_topic",
+          confidence: 0.88
+        }
+      ],
+      analyzedAt: new Date("2026-03-10T12:00:00.000Z").toISOString(),
+      model: "gemini-2.5-flash-lite"
+    });
+    mockTopicClusters.push({
+      topicId: "phrase:agentic-coding-tool-consolidation",
+      label: "Agentic Coding Tool Consolidation",
+      normalizedLabel: "agentic coding tool consolidation",
+      kind: "phrase",
+      signalCount: 1,
+      tweetCount: 3,
+      mediaUsageCount: 1,
+      textOnlyTweetCount: 0,
+      uniqueAuthorCount: 3,
+      totalLikes: 100,
+      recentTweetCount24h: 2,
+      mostRecentAt: "2026-03-10T12:00:00.000Z",
+      oldestAt: "2026-03-09T12:00:00.000Z",
+      hotnessScore: 6.4,
+      isStale: false,
+      sources: ["llm_topic"],
+      representativeTweetKeys: ["tweet-1"],
+      representativeTweets: [
+        {
+          tweetKey: "tweet-1",
+          tweetId: "tweet-1",
+          authorUsername: "fixture-1",
+          text: "Cursor is getting squeezed as agentic coding tools collapse into one stack.",
+          createdAt: "2026-03-10T12:00:00.000Z"
+        }
+      ],
+      suggestedAngles: ["Write the second-order take."]
+    });
+
+    const { searchTopicIndex } = await import("@/src/server/chroma-facets");
+    const result = await searchTopicIndex({
+      query: "agentic coding IDE replacement Cursor"
+    });
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]?.document).toContain("stance: observational");
+    expect(result.results[0]?.document).toContain("search_keyword: IDE replacement");
+    expect(result.results[0]?.topic.label).toBe("Agentic Coding Tool Consolidation");
+    expect(result.results[0]?.analysis.targetEntity).toBe("Cursor");
   });
 });

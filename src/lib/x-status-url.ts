@@ -24,3 +24,13 @@ export function normalizeXStatusUrl(value: string | null | undefined): string | 
 export function isXStatusUrl(value: string | null | undefined): boolean {
   return normalizeXStatusUrl(value) !== null;
 }
+
+export function getPreferredXStatusUrl(value: string | null | undefined): string | null {
+  const normalized = normalizeXStatusUrl(value);
+  if (normalized) {
+    return normalized;
+  }
+
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}

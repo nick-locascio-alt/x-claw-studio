@@ -3,8 +3,11 @@ import { promisify } from "node:util";
 import { loadEnv } from "@/src/lib/env";
 
 const execFileAsync = promisify(execFile);
-
 loadEnv();
+const OPENCLAW_EXEC_MAX_BUFFER_BYTES = Math.max(
+  1024 * 1024,
+  Number(process.env.OPENCLAW_EXEC_MAX_BUFFER_MB || 16) * 1024 * 1024
+);
 
 export interface OpenClawTab {
   targetId: string;
@@ -32,7 +35,8 @@ function parseJson<T>(stdout: string): T {
 async function runBrowserJson<T>(args: string[]): Promise<T> {
   const { stdout } = await execFileAsync("openclaw", args, {
     cwd: process.cwd(),
-    env: process.env
+    env: process.env,
+    maxBuffer: OPENCLAW_EXEC_MAX_BUFFER_BYTES
   });
   return parseJson<T>(stdout);
 }
@@ -101,11 +105,43 @@ export async function evaluateOnTab(targetId: string, fn: string): Promise<unkno
     ],
     {
       cwd: process.cwd(),
-      env: process.env
+      env: process.env,
+      maxBuffer: OPENCLAW_EXEC_MAX_BUFFER_BYTES
     }
   );
 
   return parseEvaluateOutput(stdout);
+}
+
+function isXTab(tab: OpenClawTab): boolean {
+  const url = tab.url ?? "";
+  return url.includes("x.com") || url.includes("twitter.com");
+}
+
+function isTabNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.message.includes("tab not found");
+}
+
+async function canEvaluateTab(targetId: string): Promise<boolean> {
+  try {
+    await evaluateOnTab(
+      targetId,
+      `() => ({
+        href: window.location.href || null,
+        title: document.title || null
+      })`
+    );
+    return true;
+  } catch (error) {
+    if (isTabNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function readRequests(targetId: string, filter?: string): Promise<string[]> {
@@ -126,7 +162,8 @@ export async function readRequests(targetId: string, filter?: string): Promise<s
 
   const { stdout } = await execFileAsync("openclaw", args, {
     cwd: process.cwd(),
-    env: process.env
+    env: process.env,
+    maxBuffer: OPENCLAW_EXEC_MAX_BUFFER_BYTES
   });
 
   return stdout
@@ -162,7 +199,8 @@ export async function openclawWait(targetId: string, ms: number): Promise<void> 
     ],
     {
       cwd: process.cwd(),
-      env: process.env
+      env: process.env,
+      maxBuffer: OPENCLAW_EXEC_MAX_BUFFER_BYTES
     }
   );
 }
@@ -189,7 +227,8 @@ export async function openclawFocus(targetId: string): Promise<void> {
     ],
     {
       cwd: process.cwd(),
-      env: process.env
+      env: process.env,
+      maxBuffer: OPENCLAW_EXEC_MAX_BUFFER_BYTES
     }
   );
 }
@@ -211,18 +250,47 @@ export async function chooseAttachedXTab(tabIndex = 0): Promise<OpenClawTab> {
     );
   }
 
-  const url = selected.url ?? "";
-  if (!url.includes("x.com") && !url.includes("twitter.com")) {
+  if (!isXTab(selected)) {
     throw new Error(
       [
         `Attached tab index ${tabIndex} is not an X/Twitter page.`,
-        `url=${url || "unknown"}`,
+        `url=${selected.url || "unknown"}`,
         "Use `openclaw browser --browser-profile chrome tabs --json` and choose a tab whose URL is on x.com or twitter.com."
       ].join(" ")
     );
   }
 
-  return selected;
+  if (await canEvaluateTab(selected.targetId)) {
+    return selected;
+  }
+
+  for (const candidate of tabs) {
+    if (candidate.targetId === selected.targetId || !isXTab(candidate)) {
+      continue;
+    }
+
+    if (await canEvaluateTab(candidate.targetId)) {
+      console.warn(
+        [
+          "Requested OpenClaw tab is listed but not controllable; falling back to another healthy X tab.",
+          `requestedIndex=${tabIndex}`,
+          `requestedTargetId=${selected.targetId}`,
+          `fallbackTargetId=${candidate.targetId}`,
+          `fallbackUrl=${candidate.url || "unknown"}`
+        ].join(" ")
+      );
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    [
+      "OpenClaw found X/Twitter tabs, but none were controllable.",
+      `requested tab index=${tabIndex}`,
+      `requested targetId=${selected.targetId}`,
+      "Use `openclaw browser --browser-profile chrome tabs --json` to inspect tabs, then reload or reopen the broken X tab before rerunning the crawl."
+    ].join(" ")
+  );
 }
 
 export async function verifyOpenClawTabHealth(tabIndex = 0): Promise<{

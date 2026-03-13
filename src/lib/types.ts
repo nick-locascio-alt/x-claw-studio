@@ -96,6 +96,7 @@ export interface UsageAnalysis {
   action_or_event: string | null;
   video_music: string | null;
   video_sound: string | null;
+  video_dialogue: string | null;
   video_action: string | null;
   primary_emotion: string | null;
   emotional_tone: string | null;
@@ -168,6 +169,135 @@ export interface TweetUsageRecord {
   hotnessScore: number;
 }
 
+export interface CapturedTweetRecord {
+  tweetKey: string;
+  tweet: ExtractedTweet;
+  hasMedia: boolean;
+  mediaCount: number;
+  analyzedMediaCount: number;
+  firstMediaAssetId: string | null;
+  firstMediaAssetStarred: boolean;
+  topicLabels: string[];
+  topTopicLabel: string | null;
+  topTopicHotnessScore: number;
+}
+
+export type TopicSignalKind = "entity" | "cashtag" | "hashtag" | "phrase" | "reference" | "brand" | "intent";
+export type TopicSentiment = "positive" | "negative" | "mixed" | "neutral";
+export type TopicStance =
+  | "supportive"
+  | "critical"
+  | "observational"
+  | "celebratory"
+  | "anxious"
+  | "curious"
+  | "mixed";
+export type TopicOpinionIntensity = "low" | "medium" | "high";
+
+export interface TweetTopicSignal {
+  key: string;
+  label: string;
+  kind: TopicSignalKind;
+  source: "tweet_text" | "usage_analysis" | "llm_topic";
+  confidence: number;
+}
+
+export interface TweetTopicAnalysisRecord {
+  analysisId: string;
+  tweetKey: string;
+  tweetId: string | null;
+  authorUsername: string | null;
+  createdAt: string | null;
+  text: string | null;
+  usageIds: string[];
+  summaryLabel: string | null;
+  isNews: boolean;
+  newsPeg: string | null;
+  whyNow: string | null;
+  sentiment: TopicSentiment;
+  stance: TopicStance;
+  emotionalTone: string | null;
+  opinionIntensity: TopicOpinionIntensity;
+  targetEntity: string | null;
+  confidence: number;
+  signals: TweetTopicSignal[];
+  analyzedAt: string;
+  model: string;
+}
+
+export interface TweetTopicRecord {
+  tweetKey: string;
+  tweetId: string | null;
+  authorUsername: string | null;
+  createdAt: string | null;
+  text: string | null;
+  usageIds: string[];
+  signals: TweetTopicSignal[];
+  topicIds: string[];
+  topTopicId: string | null;
+  topTopicLabel: string | null;
+  topTopicHotnessScore: number;
+}
+
+export interface TopicClusterRecord {
+  topicId: string;
+  label: string;
+  normalizedLabel: string;
+  kind: TopicSignalKind;
+  signalCount: number;
+  tweetCount: number;
+  mediaUsageCount: number;
+  textOnlyTweetCount: number;
+  uniqueAuthorCount: number;
+  totalLikes: number;
+  recentTweetCount24h: number;
+  mostRecentAt: string | null;
+  oldestAt: string | null;
+  hotnessScore: number;
+  isStale: boolean;
+  sources: Array<"tweet_text" | "usage_analysis" | "llm_topic">;
+  representativeTweetKeys: string[];
+  representativeTweets: Array<{
+    tweetKey: string;
+    tweetId: string | null;
+    authorUsername: string | null;
+    text: string | null;
+    createdAt: string | null;
+  }>;
+  suggestedAngles: string[];
+}
+
+export interface GroundedNewsSource {
+  uri: string;
+  title: string;
+}
+
+export interface GroundedTopicNews {
+  topicId: string;
+  fetchedAt: string;
+  model: string;
+  summary: string;
+  summaryWithCitations: string;
+  whyNow: string;
+  suggestedAngles: string[];
+  searchQueries: string[];
+  sources: GroundedNewsSource[];
+}
+
+export interface GroundedTopicNewsCache {
+  generatedAt: string;
+  items: GroundedTopicNews[];
+}
+
+export interface TopicIndex {
+  generatedAt: string;
+  tweetCount: number;
+  topicCount: number;
+  topicAnalyses: TweetTopicAnalysisRecord[];
+  tweets: TweetTopicRecord[];
+  topics: TopicClusterRecord[];
+}
+
 export interface MediaAssetPhashMatch {
   asset: MediaAssetRecord;
   distance: number | null;
@@ -187,7 +317,10 @@ export type RunTask =
   | "crawl_timeline"
   | "crawl_openclaw"
   | "capture_openclaw_current"
+  | "capture_openclaw_current_tweet"
+  | "capture_openclaw_current_tweet_and_compose_replies"
   | "analyze_missing"
+  | "analyze_topics"
   | "rebuild_media_assets"
   | "backfill_media_native_types";
 export type RunTrigger = "manual" | "scheduled";

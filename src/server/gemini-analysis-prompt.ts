@@ -87,7 +87,7 @@ function buildFacetGuidance(mode: GeminiAnalysisPromptMediaMode): string[] {
     "- has_logo_or_watermark: true if a logo, brand mark, or watermark is visibly embedded in the media; false otherwise.",
     "- caption_brief: literal one-sentence caption of the media.",
     "- scene_description: fuller visual description.",
-    "- video_music / video_sound / video_action: these are video-only fields. For still images, set them to null.",
+    "- video_music / video_sound / video_dialogue / video_action: these are video-only fields. For still images, set them to null.",
     "- cultural_reference: identify any specific show, film, character, actor, meme template, historical event, or other external reference that is materially relevant to the joke or meaning. Include the relevant role, plotline, reputation, and any cross-company or cross-country copying dynamic when important.",
     "- reference_entity: the most specific named entity involved in the reference, such as a character, actor, politician, company, product, or meme template name.",
     "- reference_source: the broader source or canon, such as a TV show, movie, franchise, platform, historical event, or internet subculture.",
@@ -111,9 +111,10 @@ function buildFacetGuidance(mode: GeminiAnalysisPromptMediaMode): string[] {
     return [
       ...shared,
       "Video-specific guidance:",
-      "- Because this is a video, treat video_music, video_sound, and video_action as first-class fields and fill them whenever they are observable.",
+      "- Because this is a video, treat video_music, video_sound, video_dialogue, and video_action as first-class fields and fill them whenever they are observable.",
       "- For video_music, mention whether music is present, what kind it is, and what mood or pacing it creates. If there is clearly no music, say so.",
       "- For video_sound, describe dialogue, ambient sound, sound effects, crowd noise, silence, or audio absence/uncertainty.",
+      "- For video_dialogue, capture the audible spoken words. Quote short exact lines when clear, otherwise paraphrase the dialogue or state that speech is absent/unclear.",
       "- For video_action, summarize the temporal sequence of visible actions or shot progression across the clip."
     ];
   }

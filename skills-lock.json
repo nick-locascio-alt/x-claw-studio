@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "nano-banana-pro": {
+      "source": "/Users/nicklocascio/Projects/node_modules/openclaw/skills/nano-banana-pro",
+      "sourceType": "path",
+      "computedHash": "7ec84bed00ba166a91561a35b4e777af3eca7285addc1f5dd3d447e8a36f8902"
+    },
+    "stop-slop": {
+      "source": "hardikpandya/stop-slop",
+      "sourceType": "github",
+      "computedHash": "83e1bb3cbf8d7d3ee8e62e748d79f3ec9254f7490527df611fd0a5080cf9efb8"
+    }
+  }
+}

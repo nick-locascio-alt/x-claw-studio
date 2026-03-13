@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeUsageAnalysis } from "@/src/lib/analysis-schema";
+import { ANALYSIS_FACET_CATALOG, ANALYSIS_FACET_NAMES, normalizeUsageAnalysis } from "@/src/lib/analysis-schema";
 
 describe("normalizeUsageAnalysis", () => {
   it("normalizes and validates a complete analysis payload", () => {
@@ -27,6 +27,7 @@ describe("normalizeUsageAnalysis", () => {
       action_or_event: "watching alerts",
       video_music: null,
       video_sound: null,
+      video_dialogue: null,
       video_action: null,
       primary_emotion: "anxiety",
       emotional_tone: "tense",
@@ -58,5 +59,14 @@ describe("normalizeUsageAnalysis", () => {
     expect(analysis.has_human_face).toBe(true);
     expect(analysis.primary_emotion).toBe("anxiety");
     expect(analysis.search_keywords).toContain("panic");
+  });
+
+  it("exposes a facet catalog entry for every facet", () => {
+    expect(ANALYSIS_FACET_CATALOG).toHaveLength(ANALYSIS_FACET_NAMES.length);
+    expect(ANALYSIS_FACET_CATALOG[0]).toMatchObject({
+      name: ANALYSIS_FACET_NAMES[0],
+      valueType: expect.any(String),
+      description: expect.any(String)
+    });
   });
 });

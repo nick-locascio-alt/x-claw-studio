@@ -3,7 +3,7 @@ import type { ExtractedTweet } from "@/src/lib/types";
 
 export function findTweetById(tweetId: string): ExtractedTweet | null {
   const data = getDashboardData();
-  return data.tweetUsages.find((usage) => usage.tweet.tweetId === tweetId)?.tweet ?? null;
+  return data.capturedTweets.find((entry) => entry.tweet.tweetId === tweetId)?.tweet ?? null;
 }
 
 export function findTweetUsage(tweetId: string, mediaIndex = 0): {

@@ -16,7 +16,7 @@ import {
 } from "@/src/server/openclaw-browser";
 import { buildUsageId } from "@/src/lib/usage-id";
 import { normalizeXStatusUrl } from "@/src/lib/x-status-url";
-import { analyzeMissingUsages } from "@/src/server/analyze-missing";
+import { queueMissingUsageAnalysis } from "@/src/server/auto-analysis";
 import { getDashboardData } from "@/src/server/data";
 import {
   buildMediaAssetIndex,
@@ -258,12 +258,9 @@ async function run(): Promise<void> {
   );
   if (autoAnalyzeAfterCrawl) {
     console.log(
-      `Auto-analyzing missing usages after crawl... elapsed=${formatDuration(Date.now() - runStartedAt)}`
+      `Queueing detached missing-usage analysis after crawl... elapsed=${formatDuration(Date.now() - runStartedAt)}`
     );
-    const result = await analyzeMissingUsages();
-    console.log(
-      `Auto-analysis complete: completed=${result.completed} skipped=${result.skipped} failed=${result.failed} totalMissing=${result.totalMissing} elapsed=${formatDuration(Date.now() - runStartedAt)}`
-    );
+    queueMissingUsageAnalysis("openclaw crawl");
   } else {
     console.log("Auto-analysis skipped because AUTO_ANALYZE_AFTER_CRAWL=0");
   }

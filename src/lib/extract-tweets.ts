@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import type { Cheerio } from "cheerio";
 import type { ExtractedTweet, TweetMedia, TweetMetrics } from "@/src/lib/types";
+import { getPreferredXStatusUrl } from "@/src/lib/x-status-url";
 
 function cleanText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -166,7 +167,7 @@ export function extractTweetsFromHtml(
     tweets.push({
       sourceName,
       tweetId: statusMatch?.[2] ?? null,
-      tweetUrl: statusHref ? `https://x.com${statusHref}` : null,
+      tweetUrl: getPreferredXStatusUrl(statusHref ? `https://x.com${statusHref}` : null),
       authorHandle: handle,
       authorUsername: statusMatch?.[1] ? `@${statusMatch[1]}` : handle,
       authorDisplayName: displayName,

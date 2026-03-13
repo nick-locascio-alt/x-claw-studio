@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   choosePromotableHlsMasterUrl,
   choosePromotableVideoUrl,
-  materializeUsageAnalysisFromAssetVideo
+  listPromotableVideoSources,
+  materializeUsageAnalysisFromAssetVideo,
+  parseFfmpegDurationSeconds
 } from "@/src/server/media-asset-video";
 import type { MediaAssetRecord, TweetUsageRecord, UsageAnalysis } from "@/src/lib/types";
 
@@ -51,6 +53,7 @@ function buildVideoAnalysis(): UsageAnalysis {
     action_or_event: "talking",
     video_music: "no music",
     video_sound: "spoken dialogue",
+    video_dialogue: "I can't do this anymore.",
     video_action: "a person speaks directly to camera with minimal movement",
     primary_emotion: "confidence",
     emotional_tone: "deadpan",
@@ -151,6 +154,32 @@ describe("choosePromotableVideoUrl", () => {
   });
 });
 
+describe("listPromotableVideoSources", () => {
+  it("tries a safe direct mp4 before falling back to the HLS master", () => {
+    const asset = buildVideoAsset([
+      "https://video.twimg.com/amplify_video/2031389215028899840/pl/CU7WoeaiUJ2YFKH0.m3u8?variant_version=1&tag=21&v=cfc",
+      "https://video.twimg.com/amplify_video/2031389215028899840/vid/avc1/480x852/example.mp4"
+    ]);
+
+    expect(listPromotableVideoSources(asset)).toEqual([
+      "https://video.twimg.com/amplify_video/2031389215028899840/vid/avc1/480x852/example.mp4",
+      "https://video.twimg.com/amplify_video/2031389215028899840/pl/CU7WoeaiUJ2YFKH0.m3u8?variant_version=1&tag=21&v=cfc"
+    ]);
+  });
+
+  it("drops an invalid remembered source and keeps the remaining safe fallback", () => {
+    const asset = buildVideoAsset([
+      "https://video.twimg.com/amplify_video/2031389215028899840/pl/CU7WoeaiUJ2YFKH0.m3u8?variant_version=1&tag=21&v=cfc"
+    ]);
+    asset.promotedVideoSourceUrl =
+      "https://video.twimg.com/amplify_video/2031389215028899840/vid/avc1/0/0/1920x1080/KbE0mEMLj8D2KtZj.mp4";
+
+    expect(listPromotableVideoSources(asset)).toEqual([
+      "https://video.twimg.com/amplify_video/2031389215028899840/pl/CU7WoeaiUJ2YFKH0.m3u8?variant_version=1&tag=21&v=cfc"
+    ]);
+  });
+});
+
 describe("materializeUsageAnalysisFromAssetVideo", () => {
   it("projects asset video analysis onto a usage id and media kind", () => {
     const analysis = materializeUsageAnalysisFromAssetVideo(buildVideoAnalysis(), buildUsage());
@@ -160,5 +189,16 @@ describe("materializeUsageAnalysisFromAssetVideo", () => {
     expect(analysis.mediaKind).toBe("video_blob");
     expect(analysis.reference_entity).toBe("Jian-Yang");
     expect(analysis.usage_notes).toContain("Derived from promoted asset video analysis.");
+  });
+});
+
+describe("parseFfmpegDurationSeconds", () => {
+  it("parses ffmpeg duration output into seconds", () => {
+    expect(parseFfmpegDurationSeconds("Duration: 00:04:59.50, start: 0.000000, bitrate: 1200 kb/s")).toBe(299.5);
+    expect(parseFfmpegDurationSeconds("Duration: 00:05:01.00, start: 0.000000, bitrate: 1200 kb/s")).toBe(301);
+  });
+
+  it("returns null when duration is not present", () => {
+    expect(parseFfmpegDurationSeconds("no duration here")).toBeNull();
   });
 });

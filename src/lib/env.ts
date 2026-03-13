@@ -7,7 +7,7 @@ export function loadEnv(): void {
     return;
   }
 
-  dotenv.config();
+  dotenv.config({ quiet: true });
   loaded = true;
 }
 

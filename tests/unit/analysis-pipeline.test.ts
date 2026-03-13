@@ -49,6 +49,7 @@ const mockUsageAnalysis: UsageAnalysis = {
   action_or_event: null,
   video_music: null,
   video_sound: null,
+  video_dialogue: null,
   video_action: null,
   primary_emotion: null,
   emotional_tone: null,
@@ -119,6 +120,7 @@ const readMediaAssetIndex = vi.fn();
 const getDashboardData = vi.fn();
 const findTweetUsage = vi.fn();
 const analyzeMediaAssetVideo = vi.fn(async () => null);
+const assertVideoWithinAnalysisLimit = vi.fn(async () => undefined);
 
 vi.mock("@/src/server/gemini-analysis", () => ({
   analyzeTweetMediaUsage,
@@ -147,7 +149,8 @@ vi.mock("@/src/server/tweet-repository", () => ({
 }));
 
 vi.mock("@/src/server/media-asset-video", () => ({
-  analyzeMediaAssetVideo
+  analyzeMediaAssetVideo,
+  assertVideoWithinAnalysisLimit
 }));
 
 describe("analyzeAndIndexTweetUsage", () => {
@@ -170,6 +173,7 @@ describe("analyzeAndIndexTweetUsage", () => {
     await analyzeAndIndexTweetUsage("tweet-1", 0);
 
     expect(analyzeMediaAssetVideo).toHaveBeenCalledWith(mockAsset, mockDashboardUsage);
+    expect(assertVideoWithinAnalysisLimit).toHaveBeenCalled();
     expect(analyzeTweetMediaUsageWithOptions).toHaveBeenCalledWith(
       mockTweet,
       expect.objectContaining({
@@ -191,6 +195,7 @@ describe("analyzeAndIndexTweetUsage", () => {
     await analyzeAndIndexTweetUsage("tweet-1", 0);
 
     expect(analyzeMediaAssetVideo).not.toHaveBeenCalled();
+    expect(assertVideoWithinAnalysisLimit).not.toHaveBeenCalled();
     expect(analyzeTweetMediaUsage).toHaveBeenCalledWith(mockTweet, 0);
     expect(analyzeTweetMediaUsageWithOptions).not.toHaveBeenCalled();
   });

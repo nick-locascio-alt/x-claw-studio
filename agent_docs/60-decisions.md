@@ -22,6 +22,102 @@ Only log things that future contributors are likely to need.
 
 ## Current Entries
 
+## 2026-03-11: Keep topic discovery deterministic and file-backed
+
+- Context: the dashboard needed topic ideas per tweet, aggregate topic clustering, and freshness scoring without adding another service dependency.
+- Decision: derive `data/analysis/topics/index.json` from captured tweet text plus existing usage-analysis facets inside the dashboard read path.
+- Why: that keeps text-only tweets in scope, preserves the repo's file-backed runtime, and avoids adding another Gemini call before the feature is useful.
+- Impact: operators now get topic clusters, topic hotness, and suggested posting angles directly in the homepage; future upgrades can swap in model-backed extraction behind the same file contract.
+- Follow-up: if extraction noise becomes a problem, add an optional tweet-topic analyzer that writes the same `TopicIndex` shape instead of changing the UI contract.
+
+## 2026-03-11: Keep grounded news as an opt-in cached overlay, not part of the core topic index
+
+- Context: topic clusters became useful for planning tweets, but the next step needed live article context and source links from Google Search grounding.
+- Decision: store grounded-news results in a separate `data/analysis/topics/news.json` cache and only refresh the hottest fresh topics when `TOPIC_GROUNDED_NEWS_ENABLED=1`.
+- Why: grounded search is billable and network-dependent, so it should not run implicitly every time the file-backed dashboard read model is assembled.
+- Impact: the base topic index remains deterministic and cheap, while the homepage can still show live article context and citations when operators explicitly enable it.
+- Follow-up: if operators want tighter control, add a dedicated CLI to warm or refresh the grounded-news cache on demand.
+
+## 2026-03-11: Replace heuristic topic extraction with cached Gemini tweet-topic analysis
+
+- Context: the first topic pass generated noisy labels like `The`, `Just`, `Going`, and `N/a`, which made the cluster ranking unusable.
+- Decision: stop generating topics inside `getDashboardData()`, add an explicit `analyze:topics` flow, and cache one Gemini topic analysis per tweet before rebuilding the topic index.
+- Why: the topic problem is semantic, not lexical. A small LLM extraction pass is more reliable than trying to stack more heuristics on top of tweet text and media-analysis prose.
+- Impact: topic quality now depends on a promptable Gemini schema, while rate-limit risk stays bounded through caching, single-threaded processing, inter-item delay, and a default 100-tweet batch cap.
+- Follow-up: if quality is still uneven, tighten the topic prompt and add a gold-set eval before touching clustering again.
+
+## 2026-03-11: Topic search should index tweet posture plus usage facets, not only topic labels
+
+- Context: once topic labels became usable, the next product need was mapping a media usage back to relevant live topics and understanding how people felt about those topics.
+- Decision: extend per-tweet topic analyses with opinion fields (`sentiment`, `stance`, `emotionalTone`, `opinionIntensity`, `targetEntity`) and index each topic analysis into Chroma with both the topic fields and saved usage-analysis facets as searchable haystack.
+- Why: media relevance is often carried by framing and rhetoric, not just by the literal topic string. A usage-detail page needs to retrieve topics through subject plus posture and supporting facet context.
+- Impact: usage detail can now search topics even before a dedicated topic-media workflow exists, and topic retrieval still works without Chroma because lexical fallback runs over the same cached topic-analysis files.
+- Follow-up: if operators want stronger media-topic matching, add a dedicated topic-to-asset retrieval index or persist grouped topic-search results per asset.
+
+## 2026-03-11: Topic-page post drafting should reuse local media retrieval instead of inventing a separate corpus path
+
+- Context: once topics became searchable, the next workflow was authoring a brand-new tweet from a hot topic and pairing it with existing local media.
+- Decision: add a dedicated topic-post composer that starts from a topic cluster, uses Gemini CLI to plan and write the post, and reuses `x-media-analyst search facets` for media retrieval before the final selection pass.
+- Why: topic-authoring is a different prompt from reply composition, but the corpus search and media-candidate contract are already good enough. Reusing that path keeps retrieval behavior consistent and avoids splitting the media corpus into multiple search stacks.
+- Impact: `/topics` now supports `plan -> search -> compose` for original tweets, and future changes to local media retrieval should benefit both reply composition and topic-post composition.
+- Follow-up: if the topic composer starts underperforming on media matches, add a topic-aware search provider that can blend topic-search hits and facet-search hits before candidate ranking.
+
+## 2026-03-11: Media-led post drafting keeps the current asset fixed instead of searching for a replacement
+
+- Context: after topic-led tweet drafting, the next workflow was authoring a new post directly from a media asset already in the corpus.
+- Decision: add a separate media-post composer on usage detail pages that uses the current asset, its saved analysis, nearby topic hits, and prior usages as context, but does not run a new media search.
+- Why: the operator intent here is not "find media for a thought"; it is "make this asset useful now." Searching for replacement media would blur that workflow with the topic composer and reply composer.
+- Impact: usage detail now supports original-post drafting around a fixed asset, while the prompt can still inspect the actual local media file when available.
+- Follow-up: if operators want variants, add an optional second step that proposes two or three alternate tweet angles for the same asset before drafting the final post.
+
+## 2026-03-11: Reply composition uses Gemini CLI headless, not the existing Gemini API client
+
+- Context: the new usage-detail reply composer needed image-aware iterative drafting against local search results, while the existing Gemini integration in the repo is tuned for analysis-time API calls.
+- Decision: keep reply composition on a separate `plan -> search -> compose` path that uses the installed `gemini` CLI in headless mode and the existing `x-media-analyst search facets` CLI for retrieval.
+- Why: this preserves a clean boundary between deterministic local corpus access and model-driven drafting, and it avoids coupling the new UX to the current Gemini API analysis implementation.
+- Impact: future provider swaps should replace the reply-composer model adapter without changing the UI or the media-search adapter; operators must treat Gemini CLI install/auth as a separate runtime dependency from `GEMINI_API_KEY`.
+- Follow-up: if reply drafts start being persisted or queued, add a dedicated file-backed store instead of overloading analysis artifacts.
+
+## 2026-03-11: Agents and Gemini CLI should run the local `stop-slop` pass before finalizing work
+
+- Context: the repo carries a local skill at [`/.agents/skills/stop-slop/SKILL.md`](/Users/nicklocascio/Projects/twitter-trend/.agents/skills/stop-slop/SKILL.md) to remove AI writing patterns from prose and tighten editing quality.
+- Decision: make that skill an explicit part of the repo quality bar and change playbook for prompts, docs, UI copy, and final explanations, and tell `gemini` to load it directly in headless prompt flows.
+- Why: the project needs a consistent guardrail against filler, predictable structure, and generic copy in both product surfaces and agent-written documentation.
+- Impact: future agents should treat the `stop-slop` review as part of done, alongside tests and docs, and Gemini CLI integrations should reference the skill file in their prompts when prose quality matters.
+- Follow-up: if more Gemini CLI tasks are added, standardize a shared prompt helper for skill loading instead of repeating the file reference.
+
+## 2026-03-11: Reply-composer asset ideas are stored in a file-backed wishlist with UI and CLI access
+
+- Context: reply composition can surface useful asset targets that are not yet tracked intentionally in the local corpus, such as recognizable templates, people, scene references, public figures, or other visual metaphors.
+- Decision: save planned asset-retrieval ideas to `data/analysis/reply-media-wishlist.json` on every compose run, dedupe them by wishlist key, and expose them through the homepage plus `x-media-analyst wishlist`.
+- Why: the repo's live runtime remains file-backed, and operators need a durable backlog of assets to source later without introducing a separate database path.
+- Impact: the wishlist now accumulates counts, triggering usage ids, goals, and example tweet context, and operators can mark entries as collected or dismissed from either the UI or CLI.
+- Follow-up: keep new composer flows on the same shared wishlist path instead of creating per-feature backlogs.
+
+## 2026-03-11: Meming.world imports use Gemini CLI for research but stay file-backed locally
+
+- Context: wishlist entries now need a way to turn desired meme ideas into reusable local reference records with template images and examples.
+- Decision: use Gemini CLI to resolve the best meming.world page and summarize general usage, then parse the page and download image assets server-side into `data/analysis/meme-templates/`.
+- Why: Gemini is useful for fuzzy template/page matching and concise usage synthesis, while page parsing and downloading are more reliable as deterministic local steps.
+- Impact: imported meme templates are now stored as JSON plus local assets, not in a live SQL database, and wishlist entries can be imported from the UI or `x-media-analyst wishlist import`.
+- Follow-up: add a dedicated page for browsing imported meme templates and connecting them back into reply-media retrieval.
+
+## 2026-03-12: Wishlist asset import falls back from meming.world to grounded web search
+
+- Context: some desired meme or reference assets are not present on meming.world, which made the old import button overstate what the workflow could actually find.
+- Decision: keep meming.world as the first-pass source, but if that path fails or yields no usable image URLs, switch to Gemini Google Search grounding, pick the best public webpage, and extract likely local image assets from that page.
+- Why: meming.world remains the cleanest source for canonical meme pages, but the product goal is broader asset sourcing, not only wiki imports.
+- Impact: wishlist imports can now succeed for non-meming-world assets, and imported template records may have `source: "grounded_web"` instead of `source: "meming_world"`.
+- Follow-up: tighten the generic webpage image ranking if fallback imports start picking noisy hero images or logos.
+
+## 2026-03-12: Generated drafts are persisted in a shared file-backed store
+
+- Context: compose flows were useful in-session, but there was no durable history for replies or generated tweets and no way to inspect in-progress or failed runs later.
+- Decision: add a shared `data/analysis/generated-drafts/index.json` store that records `running`, `complete`, and `failed` draft jobs across reply, topic-post, and media-post composition.
+- Why: draft history is an application artifact, not scheduler/run-control metadata, and it needs to be shared across compose surfaces without introducing a database.
+- Impact: `/drafts` now shows a unified history, and the reply composer can show recent draft history for the current usage or tweet.
+- Follow-up: if operators need triage or reuse workflows, add filters, starring, or explicit “promote to posting queue” actions on top of the same store.
+
 ## 2026-03-10: Agent docs added as a first-class repo navigation layer
 
 - Context: the repo had product documentation in `README.md`, but no dedicated guide for coding agents to navigate the current architecture quickly.

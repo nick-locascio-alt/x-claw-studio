@@ -5,7 +5,7 @@ import { chromium, type LaunchOptions, type Response } from "playwright";
 import { ensureDir, inferMediaExtension, inferMediaExtensionFromBuffer, slugify, writeJson } from "@/src/lib/fs";
 import { extractTweetsFromHtml } from "@/src/lib/extract-tweets";
 import { createScrollHumanizer, type ScrollHumanizerDriver } from "@/src/lib/scroll-humanizer";
-import { analyzeMissingUsages } from "@/src/server/analyze-missing";
+import { queueMissingUsageAnalysis } from "@/src/server/auto-analysis";
 import { getDashboardData } from "@/src/server/data";
 import { buildMediaAssetIndex, buildMediaAssetSummaries } from "@/src/server/media-assets";
 import type {
@@ -327,11 +327,8 @@ async function run(): Promise<void> {
     assetIndex
   });
   if (autoAnalyzeAfterCrawl) {
-    console.log("Auto-analyzing missing usages after crawl...");
-    const result = await analyzeMissingUsages();
-    console.log(
-      `Auto-analysis complete: completed=${result.completed} skipped=${result.skipped} failed=${result.failed} totalMissing=${result.totalMissing}`
-    );
+    console.log("Queueing detached missing-usage analysis after crawl...");
+    queueMissingUsageAnalysis("timeline crawl");
   }
   await browser.close();
   console.log(`Wrote manifest -> ${path.relative(projectRoot, manifestPath)}`);

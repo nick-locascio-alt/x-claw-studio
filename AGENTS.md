@@ -47,6 +47,24 @@ This repo is not database-backed in the current runtime path. The app reads from
 - Be careful in a dirty worktree. This repo often has in-progress product changes.
 - Do not assume Chroma or Gemini are available unless env and local services are configured.
 
+## Quality Bar
+
+- A local skill exists at [`/.agents/skills/stop-slop/SKILL.md`](/Users/nicklocascio/Projects/twitter-trend/.agents/skills/stop-slop/SKILL.md). Use its rules as a required pre-submit pass whenever you draft, edit, or review prose in this repo.
+- When you call `gemini` in this repo, tell it to load that skill file directly so the anti-slop pass happens inside the headless run too.
+- Before submitting, run the `stop-slop` pass over UI copy, prompts, docs, and final explanations:
+  - cut filler phrases and throat-clearing
+  - break formulaic structures and predictable contrasts
+  - vary sentence rhythm
+  - trust the reader and state facts directly
+  - cut anything that sounds like a pull-quote or explain-the-metaphor copy
+- Also review the implementation for adjacent slop:
+  - remove unnecessary abstractions, helpers, or indirection
+  - tighten prompts and labels so they are specific and operational
+  - check that loading, success, and failure states are visible in the UI
+  - check that errors from local CLIs and model calls are surfaced clearly
+  - check that interfaces preserve clean provider boundaries for future swaps
+- If a change still feels generic, repetitive, ornamental, or weakly justified after that pass, keep editing until it does not.
+
 ## Documentation Maintenance
 
 - Documentation is part of done. If you change behavior, architecture, contracts, workflows, or operator steps, update the relevant docs in the same task.

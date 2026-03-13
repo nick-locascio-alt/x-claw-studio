@@ -3,6 +3,7 @@ import path from "node:path";
 import { inferMediaExtension, inferMediaExtensionFromBuffer, slugify } from "@/src/lib/fs";
 import type { ScrollHumanizerWheelStep } from "@/src/lib/scroll-humanizer";
 import type { CrawlManifest, ExtractedTweet, InterceptedMediaClass } from "@/src/lib/types";
+import { getPreferredXStatusUrl } from "@/src/lib/x-status-url";
 import { evaluateOnTab, readRequests } from "@/src/server/openclaw-browser";
 
 export interface OpenClawPersistOptions {
@@ -20,6 +21,12 @@ export interface VisibleTweetWindow {
   safeScrollMaxPx: number;
   scrollY: number;
 }
+
+const openClawScrollTweetsMin = Math.max(1, Number(process.env.OPENCLAW_SCROLL_TWEETS_MIN || 3));
+const openClawScrollTweetsMax = Math.max(
+  openClawScrollTweetsMin,
+  Number(process.env.OPENCLAW_SCROLL_TWEETS_MAX || 6)
+);
 
 function classifyMediaUrl(url: string): InterceptedMediaClass | null {
   if (url.includes("video.twimg.com/")) return "video";
@@ -214,8 +221,12 @@ export async function measureVisibleTweetWindow(targetId: string): Promise<Visib
       const averageTweetHeight = visibleRects.length
         ? visibleRects.reduce((sum, rect) => sum + rect.height, 0) / visibleRects.length
         : 220;
-      const maxTweetsPerScroll = Math.min(4, Math.max(2, visibleRects.length + 1));
-      const minTweetsPerScroll = Math.max(1, Math.min(2, maxTweetsPerScroll));
+      const estimatedVisibleTweets = visibleRects.length || Math.max(1, Math.round(viewportHeight / Math.max(averageTweetHeight, 1)));
+      const minTweetsPerScroll = Math.max(${openClawScrollTweetsMin}, Math.min(${openClawScrollTweetsMax}, estimatedVisibleTweets + 1));
+      const maxTweetsPerScroll = Math.max(
+        minTweetsPerScroll,
+        Math.min(${openClawScrollTweetsMax}, estimatedVisibleTweets + 3)
+      );
       return {
         totalTweets: articles.length,
         visibleTweets: visibleRects.length,
@@ -327,7 +338,14 @@ export async function captureVisibleTweets(
     }`
   );
 
-  return Array.isArray(result) ? (result as ExtractedTweet[]) : [];
+  if (!Array.isArray(result)) {
+    return [];
+  }
+
+  return (result as ExtractedTweet[]).map((tweet) => ({
+    ...tweet,
+    tweetUrl: getPreferredXStatusUrl(tweet.tweetUrl)
+  }));
 }
 
 export async function capturePageSnapshot(targetId: string): Promise<{

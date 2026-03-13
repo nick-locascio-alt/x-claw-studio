@@ -35,12 +35,27 @@ const MANUAL_ACTIONS: Array<{
   {
     task: "capture_openclaw_current",
     title: "Capture Current Page",
-    description: "Reset to the top of the attached page, then scroll through the loaded timeline and capture what is already there."
+    description: "Start from the attached page's current scroll position, then keep scrolling through what is already loaded."
+  },
+  {
+    task: "capture_openclaw_current_tweet",
+    title: "Capture Tweet + 10 Replies",
+    description: "Jump to the top of the current tweet page, grab the main tweet plus roughly the first 10 replies, then stop."
+  },
+  {
+    task: "capture_openclaw_current_tweet_and_compose_replies",
+    title: "Capture + Draft All Replies",
+    description: "Run the focused tweet capture, then generate reply drafts for every reply goal and save them to draft history."
   },
   {
     task: "analyze_missing",
     title: "Analyze Missing",
     description: "Backfill Gemini analysis for usages that do not have saved output yet."
+  },
+  {
+    task: "analyze_topics",
+    title: "Analyze Topics",
+    description: "Run Gemini topic extraction in a bounded batch and rebuild the topic index cache."
   },
   {
     task: "crawl_timeline",
@@ -87,6 +102,7 @@ export function ControlPanel({ schedulerConfig, runHistory }: ControlPanelProps)
   const [openclawKeepScrollPosition, setOpenclawKeepScrollPosition] = useState(false);
   const [openclawStartUrl, setOpenclawStartUrl] = useState("");
   const [timezone, setTimezone] = useState(schedulerConfig.timezone);
+  const [topicBatchLimit, setTopicBatchLimit] = useState("100");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<RunHistoryEntry | null>(null);
   const [logContent, setLogContent] = useState("");
@@ -223,7 +239,14 @@ export function ControlPanel({ schedulerConfig, runHistory }: ControlPanelProps)
       const parsedTabIndex = Number(openclawTabIndex);
       const openclawTargetTabIndex =
         Number.isInteger(parsedTabIndex) && parsedTabIndex >= 0 ? parsedTabIndex : 0;
-      const useOpenClawOptions = task === "crawl_openclaw" || task === "capture_openclaw_current";
+      const useOpenClawOptions =
+        task === "crawl_openclaw" ||
+        task === "capture_openclaw_current" ||
+        task === "capture_openclaw_current_tweet" ||
+        task === "capture_openclaw_current_tweet_and_compose_replies";
+      const parsedTopicBatchLimit = Number(topicBatchLimit);
+      const normalizedTopicBatchLimit =
+        Number.isInteger(parsedTopicBatchLimit) && parsedTopicBatchLimit > 0 ? parsedTopicBatchLimit : 100;
       const response = await fetch("/api/control/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -231,7 +254,8 @@ export function ControlPanel({ schedulerConfig, runHistory }: ControlPanelProps)
           task,
           openclawTargetTabIndex,
           openclawKeepScrollPosition: useOpenClawOptions ? openclawKeepScrollPosition : false,
-          openclawStartUrl: useOpenClawOptions && openclawStartUrl.trim() ? openclawStartUrl.trim() : null
+          openclawStartUrl: useOpenClawOptions && openclawStartUrl.trim() ? openclawStartUrl.trim() : null,
+          topicBatchLimit: task === "analyze_topics" ? normalizedTopicBatchLimit : null
         })
       });
       const data = (await response.json().catch(() => null)) as
@@ -397,6 +421,26 @@ export function ControlPanel({ schedulerConfig, runHistory }: ControlPanelProps)
                   </div>
                   {isPending ? <span className="tt-chip tt-chip-accent">working</span> : null}
                 </div>
+                <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,220px)_1fr]">
+                  <label className="tt-field">
+                    <span className="tt-field-label">Topic Batch Size</span>
+                    <select
+                      value={topicBatchLimit}
+                      onChange={(event) => setTopicBatchLimit(event.target.value)}
+                      className="tt-select"
+                    >
+                      <option value="25">25 tweets</option>
+                      <option value="50">50 tweets</option>
+                      <option value="100">100 tweets</option>
+                      <option value="200">200 tweets</option>
+                    </select>
+                  </label>
+                  <div className="tt-subpanel-soft">
+                    <p className="text-sm leading-6 text-slate-300">
+                      Used by <strong className="text-slate-100">Analyze Topics</strong>. The run stays single-threaded and uses the repo&apos;s delay setting to avoid Gemini rate-limit spikes.
+                    </p>
+                  </div>
+                </div>
                 <div className="control-action-grid">
                   {MANUAL_ACTIONS.map((action) => (
                     <article key={action.task} className="action-tile">
@@ -418,7 +462,7 @@ export function ControlPanel({ schedulerConfig, runHistory }: ControlPanelProps)
 
               <div className="tt-subpanel">
                 <p className="tt-copy">
-                OpenClaw actions use the exact 0-based array index from `openclaw browser --browser-profile chrome tabs --json`. `Run Crawl` refreshes and scrolls that tab by default. `Capture Current Page` does not navigate to a new URL, but it normally resets to the top and scrolls through the currently loaded page contents while capturing. Enable `Keep current scroll position` to start manual OpenClaw runs from wherever the tab already is. If you provide a tweet status URL, the manual OpenClaw run navigates there first and auto-stars only that top tweet&apos;s media after capture.
+                OpenClaw actions use the exact 0-based array index from `openclaw browser --browser-profile chrome tabs --json`. `Run Crawl` refreshes and scrolls that tab by default. `Capture Current Page` stays on the current page and starts from the tab&apos;s current scroll position. `Capture Tweet + 10 Replies` resets to the top of the tweet page and stops once it has the main tweet plus the early reply window. `Capture + Draft All Replies` runs that tighter capture and then saves one draft for each reply goal. `Keep current scroll position` only affects manual `Run Crawl` runs. If you provide a tweet status URL, the manual OpenClaw run navigates there first and auto-stars only that top tweet&apos;s media after capture.
                 </p>
               </div>
             </div>

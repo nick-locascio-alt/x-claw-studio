@@ -303,6 +303,15 @@
     clip-path: polygon(0 8px, 8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px));
   }
 
+  .tt-alternatives-list {
+    @apply mt-3 grid gap-3;
+  }
+
+  .tt-alternative-card {
+    @apply border border-slate-700 bg-slate-900/70 p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)];
+    clip-path: polygon(0 8px, 8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px));
+  }
+
   .tt-data-label {
     @apply font-[family:var(--font-label)] text-[10px] uppercase tracking-[0.24em] text-muted;
   }

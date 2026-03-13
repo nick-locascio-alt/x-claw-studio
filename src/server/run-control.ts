@@ -31,7 +31,13 @@ const TASK_TO_COMMAND: Record<RunTask, { command: string; args: string[] }> = {
   crawl_timeline: { command: "npm", args: ["run", "crawl:timeline"] },
   crawl_openclaw: { command: "npm", args: ["run", "crawl:openclaw"] },
   capture_openclaw_current: { command: "npm", args: ["run", "capture:openclaw-current"] },
+  capture_openclaw_current_tweet: { command: "npm", args: ["run", "capture:openclaw-current-tweet"] },
+  capture_openclaw_current_tweet_and_compose_replies: {
+    command: "npm",
+    args: ["run", "capture:openclaw-current-tweet-and-compose-replies"]
+  },
   analyze_missing: { command: "npm", args: ["run", "analyze:missing"] },
+  analyze_topics: { command: "npm", args: ["run", "analyze:topics"] },
   rebuild_media_assets: { command: "npm", args: ["run", "media:rebuild"] },
   backfill_media_native_types: { command: "npm", args: ["run", "media:backfill-native-types"] }
 };
@@ -340,6 +346,7 @@ export function triggerTask(
     openclawTargetTabIndex?: number | null;
     openclawKeepScrollPosition?: boolean;
     openclawStartUrl?: string | null;
+    topicBatchLimit?: number | null;
   }
 ): RunHistoryEntry {
   ensureDir(logsDir);
@@ -372,6 +379,9 @@ export function triggerTask(
   if (options?.openclawStartUrl) {
     appendLog(logPath, `[${startedAt}] OPENCLAW_START_URL=${options.openclawStartUrl}\n`);
   }
+  if (typeof options?.topicBatchLimit === "number") {
+    appendLog(logPath, `[${startedAt}] ANALYZE_TOPICS_DEFAULT_LIMIT=${options.topicBatchLimit}\n`);
+  }
 
   const { command, args } = TASK_TO_COMMAND[task];
   const child = spawn(command, args, {
@@ -384,7 +394,10 @@ export function triggerTask(
         ? { OPENCLAW_TARGET_TAB_INDEX: String(options.openclawTargetTabIndex) }
         : {}),
       ...(options?.openclawKeepScrollPosition ? { OPENCLAW_KEEP_SCROLL_POSITION: "1" } : {}),
-      ...(options?.openclawStartUrl ? { OPENCLAW_START_URL: options.openclawStartUrl } : {})
+      ...(options?.openclawStartUrl ? { OPENCLAW_START_URL: options.openclawStartUrl } : {}),
+      ...(typeof options?.topicBatchLimit === "number"
+        ? { ANALYZE_TOPICS_DEFAULT_LIMIT: String(options.topicBatchLimit) }
+        : {})
     }
   });
 
@@ -408,7 +421,11 @@ export function triggerTask(
 
   child.on("close", (code) => {
     const manifestRunId =
-      task === "crawl_timeline" || task === "crawl_openclaw" || task === "capture_openclaw_current"
+      task === "crawl_timeline" ||
+      task === "crawl_openclaw" ||
+      task === "capture_openclaw_current" ||
+      task === "capture_openclaw_current_tweet" ||
+      task === "capture_openclaw_current_tweet_and_compose_replies"
         ? discoverLatestManifestRunId()
         : null;
     updateRunHistoryEntry(runControlId, (entry) => ({

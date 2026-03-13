@@ -69,7 +69,7 @@ export function UsageQueue(props: {
   const [viewMode, setViewMode] = useState<"summary" | "detail">("detail");
   const [columnsPerRow, setColumnsPerRow] = useState(props.compact ? 3 : 3);
   const [expandedUsageIds, setExpandedUsageIds] = useState<string[]>([]);
-  const [hideDuplicateAssets, setHideDuplicateAssets] = useState(props.initialHideDuplicateAssets ?? false);
+  const [hideDuplicateAssets, setHideDuplicateAssets] = useState(props.initialHideDuplicateAssets ?? true);
   const [query, setQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<"newest" | "duplicates" | "hotness">("newest");
   const deferredQuery = useDeferredValue(query);

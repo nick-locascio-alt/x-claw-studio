@@ -4,6 +4,7 @@ node_modules/
 .env
 .env.local
 .env.*.local
+.env.swp
 
 data/
 coverage/
@@ -12,4 +13,7 @@ build/
 
 *.log
 *.tsbuildinfo
+*.tgz
 .DS_Store
+.agents/
+tmp
