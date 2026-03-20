@@ -1,131 +1,121 @@
-# x-claw-studio
+# twitter-trend
 
-Turn X into a local trend engine, media library, and post-writing weapon.
+<p align="center">
+  <strong>Turn X into a local trend engine, media library, and post-writing weapon.</strong>
+</p>
 
-`x-claw-studio` captures tweets and media from X, stores everything on your machine, analyzes how media gets used, and gives you a workspace to search patterns, spot breakout formats, and draft better posts from your own corpus.
+<p align="center">
+  Capture tweets and media from X, keep the raw artifacts on your own machine, analyze what keeps getting reused, and turn that archive into better posts.
+</p>
 
-This is for operators, researchers, meme hunters, and growth people who do not want another black-box dashboard that shows charts and hides the raw material.
+<p align="center">
+  <a href="#quickstart"><strong>Quickstart</strong></a> &middot;
+  <a href="#what-it-does"><strong>What It Does</strong></a> &middot;
+  <a href="#cli-first"><strong>CLI</strong></a> &middot;
+  <a href="#setup"><strong>Setup</strong></a> &middot;
+  <a href="#repo-guide"><strong>Repo Guide</strong></a>
+</p>
 
-It ships both a dashboard and a real CLI, and it is OpenClaw-compatible out of the box.
+<p align="center">
+  <img src="https://img.shields.io/badge/local--first-filesystem-black" alt="Local-first" />
+  <img src="https://img.shields.io/badge/runtime-Next.js%20%2B%20TypeScript-111827" alt="Next.js and TypeScript" />
+  <img src="https://img.shields.io/badge/cli-x--media--analyst-1d4ed8" alt="x-media-analyst CLI" />
+  <img src="https://img.shields.io/badge/analysis-Gemini-0f766e" alt="Gemini analysis" />
+</p>
 
-There is also a repo-level agent guide at [`SKILL.md`](./SKILL.md) for agents that need a portable install, setup, and CLI reference.
+`twitter-trend` is a local-first Next.js app and TypeScript CLI for people who live on X and want better source material, better recall, and better output.
 
-## The Pitch
+Most social dashboards flatten everything into charts. This keeps the receipts: raw tweets, media, usage analysis, duplicate groups, topic signals, draft workflows, and the local files behind all of it.
 
-Most social tools tell you what happened.
+If you post often, study fast-moving accounts, hunt for meme formats, or build a content machine around X, this gives you a tighter loop:
 
-This repo helps you keep the receipts:
-
-- the tweets
-- the media
-- the context
-- the analysis
-- the reusable patterns
-
-Then it gives you interfaces to turn that archive into output.
-
-## Why People Will Care
-
-- It is local-first, so you keep the raw tweets, media, and analysis
-- It has a serious CLI, not just a UI wrapper
-- It is compatible with existing OpenClaw-style capture flows and command aliases
-- It closes the loop from capture to search to drafting in one repo
+1. Capture what is showing up.
+2. Rebuild the media library.
+3. Analyze why assets are getting used.
+4. Search the archive for reusable patterns.
+5. Draft replies and original posts from your own corpus.
 
 ## What It Does
 
-- Captures tweets and media from your X home timeline or a single tweet URL
+- Captures tweets and media from X timelines, priority accounts, or a single tweet URL
 - Stores raw crawl artifacts locally under `data/`
-- Builds a media index with duplicate and similarity grouping
-- Runs Gemini analysis on tweet-media usages
-- Indexes analysis facets for local search with optional Chroma vector search
-- Surfaces everything in a Next.js dashboard for review, topic discovery, and drafting
+- Rebuilds media asset records plus duplicate and similarity groupings
+- Runs Gemini-based analysis on tweet-media usages and topics
+- Supports optional Chroma-backed facet search
+- Ships a dashboard for review, search, drafting, and run control
+- Ships an installable CLI for capture, analysis, rebuilds, search, and stack supervision
 
-## Why This Is Interesting
+## Why It Hits Different
 
-Most X tools stop at monitoring. `x-claw-studio` is built around a tighter loop:
-
-1. Capture what people are posting
-2. Understand why the media works
-3. Find reusable formats, themes, and reactions
-4. Draft better replies and original posts from your own local corpus
-
-If you care about going viral, this is the useful part: you are not just tracking topics. You are building a searchable library of how attention gets packaged.
+- Local-first: the current runtime reads from files on disk, not a hosted black box
+- Full loop: capture, analysis, search, and drafting live in one repo
+- Operator-friendly: the CLI is a first-class surface, not an afterthought
+- OpenClaw-compatible: existing OpenClaw-style capture flows and aliases still work
+- Inspectable: your source of truth is in `data/`, so you can audit what the app is doing
 
 ## Who It Is For
 
 - Solo founders posting every day
-- Growth teams mining X for angles and reusable formats
-- Researchers studying media usage, rhetoric, and topic spread
-- Meme accounts and reply guys who want faster pattern recall
-- Anyone who wants local ownership of their social intelligence stack
+- Growth teams mining X for angles, hooks, and reusable media
+- Researchers studying rhetoric, meme spread, and topic motion
+- Meme accounts and reply-heavy operators who want faster recall
+- Anyone who wants ownership of their social intelligence stack
 
 ## Main Surfaces
 
-- `/` home dashboard: capture status, queue, topics, search, and run controls
-- `/tweets`: browse captured tweets with filtering and search
-- `/queue`: review media usages
-- `/search`: search the local media corpus by semantic facets
-- `/topics`: inspect topic clusters and draft from them
-- `/replies`: load a tweet and draft replies
-- `/clone`: rewrite a source tweet with configurable preservation rules
-- `/drafts`: review saved generated drafts
+| Surface | What you do there |
+| --- | --- |
+| `/` | Run the stack, inspect capture status, review queue health, and jump into search or drafting |
+| `/tweets` | Browse captured tweets with filters and search |
+| `/queue` | Review analyzed media usages and work through repeat patterns |
+| `/search` | Search the local media corpus by facets and semantics |
+| `/topics` | Inspect topic clusters and draft from them |
+| `/replies` | Load a tweet and draft replies |
+| `/clone` | Rewrite a source tweet with configurable preservation rules |
+| `/drafts` | Review saved generated drafts |
+| `/matches` | Inspect duplicate and similarity groupings |
+| `/control` | Manage scheduler settings, manual jobs, and run history |
 
-## Screenshots
+## The Loop
 
-Put screenshots in [`docs/screenshots/`](/Users/nicklocascio/Projects/twitter-trend/docs/screenshots) with these filenames:
+| Step | Outcome |
+| --- | --- |
+| Capture | Pull tweets and media into a local archive |
+| Analyze | Score usages, extract topics, and summarize why assets work |
+| Rebuild | Group duplicates, refresh media records, and keep the corpus coherent |
+| Search | Query tweets, topics, and media from the UI or CLI |
+| Draft | Turn source tweets, notes, topics, or media into new posts |
 
-- `dashboard-home.png`
-- `media-composer.png`
-- `media-search.png`
-- `media-review.png`
+## Quickstart
 
-Then this gallery will render as-is:
+### 1. Install
 
-### Home Dashboard
+```bash
+npm install
+```
 
-The command center for capture, review, search, and composition.
+### 2. Start the app
 
-![Home dashboard](docs/screenshots/dashboard-home.png)
+```bash
+npm run dev
+```
 
-### Draft From A Media Asset
+Open [http://localhost:4105](http://localhost:4105).
 
-Turn one saved asset into a new tweet with context, topic overlap, and angle hints.
+### 3. Or go straight to the CLI
 
-![Media composer](docs/screenshots/media-composer.png)
+```bash
+npm link
+x-media-analyst help
+```
 
-### Search Reusable Media
-
-Search your local corpus by mood, message, subject, or meme shape.
-
-![Media search](docs/screenshots/media-search.png)
-
-### Review What Is Repeating
-
-See which assets keep showing up, what is getting starred, and where the hotness is building.
-
-![Media review](docs/screenshots/media-review.png)
-
-Best practice:
-
-- Use full-width screenshots from real data
-- Lead with the home dashboard first
-- Show one screenshot per core workflow
-- Favor dense, high-signal states over empty screens
-
-## Stack
-
-- Next.js app router dashboard
-- TypeScript CLI pipeline
-- Local filesystem storage in `data/`
-- Gemini for analysis and topic extraction
-- Optional Chroma for vector search
-- Optional Typefully integration for saving drafts
+If you just want to inspect the UI against existing local data, `npm run dev` is enough.
 
 ## CLI First
 
-The UI is useful. The CLI is a feature.
+The UI is useful. The CLI is the real power surface.
 
-You can crawl, analyze, search, rebuild, inspect, and run the stack without living in the browser.
+You can capture, analyze, search, rebuild, and run the stack without living in the browser.
 
 ```bash
 npm link
@@ -146,48 +136,19 @@ x-media-analyst media rebuild
 x-media-analyst run stack
 ```
 
-If you prefer terminal-first workflows, this repo fully supports that mode.
-
 ## OpenClaw Compatible
 
-`x-claw-studio` keeps the OpenClaw path intact.
+If your mental model already comes from OpenClaw, you do not need to relearn the capture path.
 
-- `npm run crawl:openclaw` works as a compatibility alias
-- `x-media-analyst crawl openclaw` is supported
-- `x-media-analyst capture openclaw-current` is supported
-- `x-media-analyst capture openclaw-current-tweet` is supported
-- `x-media-analyst capture openclaw-current-tweet-and-compose-replies` is supported
-
-If you already think in OpenClaw terms, you do not need to relearn the repo to get value from it.
-
-## Quick Start
-
-### 1. Install dependencies
-
-```bash
-npm install
-```
-
-### 2. Start the app
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:4105](http://localhost:4105).
-
-If you only want to look around the UI and existing local data, that is enough.
-
-### 3. Or use the CLI directly
-
-```bash
-npm link
-x-media-analyst app dev
-```
+- `npm run crawl:openclaw`
+- `x-media-analyst crawl openclaw`
+- `x-media-analyst capture openclaw-current`
+- `x-media-analyst capture openclaw-current-tweet`
+- `x-media-analyst capture openclaw-current-tweet-and-compose-replies`
 
 ## Setup
 
-Create a `.env` file in the repo root and add only the keys you need for the flows you want to use.
+Create a `.env` file in the repo root and add only the keys for the flows you want to use.
 
 ### Required for X capture
 
@@ -208,7 +169,7 @@ APP_BASE_URL=http://localhost:4105
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
-You can use `GOOGLE_API_KEY` instead.
+`GOOGLE_API_KEY` also works.
 
 ### Optional for vector search
 
@@ -241,6 +202,7 @@ npm test
 npm run test:integration
 npm run test:e2e
 npm run crawl:x-api
+npm run capture:x-api-tweet
 npm run analyze:missing
 npm run analyze:topics -- --limit 100
 npm run media:rebuild
@@ -256,7 +218,7 @@ make up
 npm run crawl:x-api
 ```
 
-For a focused single tweet flow, use:
+For a single tweet flow:
 
 ```bash
 npm run capture:x-api-tweet
@@ -282,57 +244,26 @@ npm run search:facets -- "reaction image"
 npm run search:tweets -- --query "mask reveal"
 ```
 
-## Why This Can Spread
-
-- It solves a real pain for people who post on X constantly
-- It is local-first, which makes it feel different from generic SaaS dashboards
-- The outputs are visual, searchable, and easy to demo
-- The loop from capture to composition is easy to explain in one sentence
-
-The README, screenshots, and demo clips should sell that loop fast.
-
-## CLI
-
-This repo ships an installable CLI for capture, analysis, search, evals, wishlist management, and stack control.
-
-```bash
-npm link
-x-media-analyst help
-x-media-analyst repo root
-```
-
-Useful examples:
-
-```bash
-x-media-analyst facet list
-x-media-analyst search facets --query "terminal dashboard" --limit 5
-x-media-analyst search tweets --query "OpenAI" --filter with_media --limit 50
-x-media-analyst search topics --query "OpenAI pricing backlash" --limit 5
-x-media-analyst crawl openclaw
-x-media-analyst app dev
-x-media-analyst run stack
-```
-
 ## Data Layout
 
-The current runtime is file-backed. The app reads from local JSON artifacts, not a production database.
+The current runtime is file-backed. The app reads local JSON artifacts, not a production database.
 
-- `data/raw/`: crawl outputs and media
-- `data/analysis/tweet-usages/`: per-usage analysis JSON
-- `data/analysis/media-assets/`: asset summaries, duplicate groups, stars
-- `data/analysis/topic-tweets/`: cached topic analyses
+- `data/raw/`: crawl outputs and downloaded media
+- `data/analysis/tweet-usages/`: one JSON file per analyzed usage
+- `data/analysis/media-assets/`: asset summaries, stars, and duplicate groups
+- `data/analysis/topic-tweets/`: per-tweet topic analyses
 - `data/analysis/topics/`: aggregate topic clusters
-- `data/control/`: scheduler config, run history, logs
+- `data/control/`: scheduler config, run history, and logs
 
 ## Full Local Stack
 
-If you want the app, scheduler, and Chroma together:
+App, scheduler, and Chroma together:
 
 ```bash
 make up
 ```
 
-For the app only:
+App only:
 
 ```bash
 make up-dev
@@ -343,24 +274,38 @@ make up-dev
 What works now:
 
 - X API timeline and single-tweet capture
-- Local artifact storage
-- Media indexing and grouping
-- Gemini-based usage analysis
-- Topic extraction and browsing
-- Local media and tweet search
-- Reply, topic, media, and clone drafting workflows
+- Local artifact storage under `data/`
+- Media indexing, grouping, and duplicate detection
+- Gemini-based usage analysis and topic extraction
+- Local tweet, topic, and media search
+- Reply, topic, clone, and media-led drafting workflows
 
-Still local-operator oriented:
+Current constraints:
 
-- You are expected to run services and keep env keys locally
-- The source of truth is the filesystem under `data/`
-- Some features are optional and only light up when the relevant env or local service exists
+- This is still local-operator oriented
+- The filesystem under `data/` is the runtime source of truth
+- Some features only light up when the needed env vars or local services are present
 
 ## Repo Guide
 
 Start here if you want to understand or extend the codebase:
 
-- [`agent_docs/00-start-here.md`](./agent_docs/00-start-here.md)
-- [`agent_docs/10-repo-map.md`](./agent_docs/10-repo-map.md)
-- [`agent_docs/20-runtime-flows.md`](./agent_docs/20-runtime-flows.md)
-- [`agent_docs/40-operations.md`](./agent_docs/40-operations.md)
+- [agent_docs/00-start-here.md](./agent_docs/00-start-here.md)
+- [agent_docs/10-repo-map.md](./agent_docs/10-repo-map.md)
+- [agent_docs/20-runtime-flows.md](./agent_docs/20-runtime-flows.md)
+- [agent_docs/30-data-layout.md](./agent_docs/30-data-layout.md)
+- [agent_docs/40-operations.md](./agent_docs/40-operations.md)
+- [agent_docs/50-change-playbooks.md](./agent_docs/50-change-playbooks.md)
+- [agent_docs/60-decisions.md](./agent_docs/60-decisions.md)
+
+## Development
+
+```bash
+npm run dev
+npm run build
+npm run check
+npm run lint
+npm test
+```
+
+For deeper codebase notes, see [agent_docs/40-operations.md](./agent_docs/40-operations.md).
