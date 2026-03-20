@@ -103,6 +103,7 @@ const projectRoot = process.cwd();
 const HOTNESS_HALF_LIFE_HOURS = 48;
 const HOTNESS_DUPLICATE_WEIGHT = 2.5;
 const HOTNESS_LIKE_WEIGHT = 1;
+const HOTNESS_TOP_REPEAT_LIKES = 5;
 export const CAPTURED_TWEET_PAGE_SIZE = 200;
 export const MAX_CAPTURED_TWEET_PAGE_SIZE = 200;
 export const USAGE_PAGE_SIZE = 120;
@@ -1032,12 +1033,12 @@ export function getTopicClusterPage(input: {
 
 export function computeHotnessScore(input: {
   duplicateCount: number;
-  totalLikes: number;
+  topLikesSum: number;
   mostRecentTimestampMs: number;
   nowMs?: number;
 }): number {
   const duplicateCount = Math.max(1, input.duplicateCount);
-  const totalLikes = Math.max(0, input.totalLikes);
+  const topLikesSum = Math.max(0, input.topLikesSum);
   const mostRecentTimestampMs = Number.isFinite(input.mostRecentTimestampMs) ? input.mostRecentTimestampMs : 0;
   const nowMs = input.nowMs ?? Date.now();
   const ageHours = Math.max(0, (nowMs - mostRecentTimestampMs) / (1000 * 60 * 60));
@@ -1045,7 +1046,7 @@ export function computeHotnessScore(input: {
   const engagement =
     1 +
     HOTNESS_DUPLICATE_WEIGHT * Math.log1p(duplicateCount) +
-    HOTNESS_LIKE_WEIGHT * Math.log1p(totalLikes);
+    HOTNESS_LIKE_WEIGHT * Math.log1p(topLikesSum);
 
   const score = engagement * decay;
   return Number.isFinite(score) ? Number(score.toFixed(4)) : 0;
@@ -1069,11 +1070,15 @@ function buildHotnessScoreByUsageId(input: {
       .map((usageId) => usageById.get(usageId))
       .filter((value): value is TweetUsageRecord => Boolean(value));
 
-    const totalLikes = groupUsages.reduce((sum, entry) => sum + parseCompactNumber(entry.tweet.metrics.likes), 0);
+    const topLikesSum = groupUsages
+      .map((entry) => parseCompactNumber(entry.tweet.metrics.likes))
+      .sort((left, right) => right - left)
+      .slice(0, HOTNESS_TOP_REPEAT_LIKES)
+      .reduce((sum, likes) => sum + likes, 0);
     const mostRecentTimestampMs = groupUsages.reduce((latest, entry) => Math.max(latest, getUsageTimestampMs(entry)), 0);
     const score = computeHotnessScore({
       duplicateCount: groupUsages.length,
-      totalLikes,
+      topLikesSum,
       mostRecentTimestampMs
     });
 

@@ -1,157 +1,116 @@
-# X Timeline Media Index
+# twitter-trend
 
-Local-first pipeline for capturing media from your X timeline, preserving tweet context, and building a retrieval-oriented index of how each image/video/GIF gets used.
+Turn X into a local trend engine, media library, and post-writing weapon.
 
-## What this system is for
+`twitter-trend` captures tweets and media from X, stores everything on your machine, analyzes how media gets used, and gives you a workspace to search patterns, spot breakout formats, and draft better posts from your own corpus.
 
-You wanted to answer questions like:
+This is for operators, researchers, meme hunters, and growth people who do not want another black-box dashboard that shows charts and hides the raw material.
 
-- what is in the media
-- what does it convey
-- why did the poster use it
-- how is it typically used
-- what metaphor or rhetorical pairing exists between the media and its text
+## The Pitch
 
-This scaffold is built around two levels of storage:
+Most social tools tell you what happened.
 
-1. Per-usage data: every time a media asset appears in a tweet, preserve the tweet, author, text, metrics, and a usage-specific semantic analysis.
-2. Per-asset aggregation: summarize all known usages into one canonical profile for retrieval and later agentic search.
+This repo helps you keep the receipts:
 
-## Current status
+- the tweets
+- the media
+- the context
+- the analysis
+- the reusable patterns
 
-Implemented now:
+Then it gives you interfaces to turn that archive into output.
 
-- a TypeScript Next.js dashboard for browsing capture and future analysis stages
-- an X API capture path for home timeline pulls and single-post lookup by status URL
-- a Playwright crawler scaffold that scrolls the timeline and captures tweet HTML
-- response interception for `pbs.twimg.com` and `video.twimg.com`
-- poster-first capture policy for videos: save poster now, keep video URL metadata, defer full video download
-- Gemini multimodal analysis for a single tweet-media usage
-- Chroma indexing with one document per analysis facet
-- a normalized SQL schema for authors, tweets, media assets, usage analyses, and aggregate summaries
+## What It Does
 
-Not implemented yet:
+- Captures tweets and media from your X home timeline or a single tweet URL
+- Stores raw crawl artifacts locally under `data/`
+- Builds a media index with duplicate and similarity grouping
+- Runs Gemini analysis on tweet-media usages
+- Indexes analysis facets for local search with optional Chroma vector search
+- Surfaces everything in a Next.js dashboard for review, topic discovery, and drafting
 
-- database writes
-- deduplication by file hash / perceptual hash
-- aggregate per-asset summaries across many usages
+## Why This Is Interesting
 
-## Recommended architecture
+Most X tools stop at monitoring. `twitter-trend` is built around a tighter loop:
 
-### 1. Capture layer
+1. Capture what people are posting
+2. Understand why the media works
+3. Find reusable formats, themes, and reactions
+4. Draft better replies and original posts from your own local corpus
 
-Preferred: use the X API capture path for home timeline pulls and single-post lookups.
+If you care about going viral, this is the useful part: you are not just tracking topics. You are building a searchable library of how attention gets packaged.
 
-Fallback: use Playwright against a logged-in local browser session.
+## Who It Is For
 
-Capture for every seen tweet:
+- Solo founders posting every day
+- Growth teams mining X for angles and reusable formats
+- Researchers studying media usage, rhetoric, and topic spread
+- Meme accounts and reply guys who want faster pattern recall
+- Anyone who wants local ownership of their social intelligence stack
 
-- tweet id and URL
-- author handle, display name, avatar
-- created time
-- tweet body text
-- engagement metrics visible in DOM
-- raw article HTML
-- all media URLs found in DOM and network responses
+## Main Surfaces
 
-Persist raw data first. Do not make analysis part of the critical capture path.
+- `/` home dashboard: capture status, queue, topics, search, and run controls
+- `/tweets`: browse captured tweets with filtering and search
+- `/queue`: review media usages
+- `/search`: search the local media corpus by semantic facets
+- `/topics`: inspect topic clusters and draft from them
+- `/replies`: load a tweet and draft replies
+- `/clone`: rewrite a source tweet with configurable preservation rules
+- `/drafts`: review saved generated drafts
 
-### 2. Media persistence layer
+## Screenshots
 
-Store assets locally under `data/raw/<run-id>/media/`.
+Put screenshots in [`docs/screenshots/`](/Users/nicklocascio/Projects/twitter-trend/docs/screenshots).
 
-Persist:
+Suggested filenames:
 
-- original URL
-- local file path
-- content type
-- source run id
-- tweet ids that referenced the asset
+- `dashboard-home.png`
+- `tweet-browser.png`
+- `media-search.png`
+- `topic-explorer.png`
+- `reply-composer.png`
 
-Recommended capture policy:
+Once you add them, wire them into this section like this:
 
-- images: download at crawl time
-- video posters: download at crawl time
-- full videos / HLS segments: do not download during capture
-- full video bytes: download only after the asset crosses your trending threshold
+```md
+![Home dashboard](docs/screenshots/dashboard-home.png)
+![Media search](docs/screenshots/media-search.png)
+```
 
-For dedupe, add both:
+Recommended gallery order:
 
-- `sha256` for exact duplicates
-- perceptual hash for near-duplicate images and extracted video keyframes
+1. Home dashboard
+2. Tweet browser
+3. Media search
+4. Topic explorer
+5. Reply composer
 
-### 3. Analysis layer
+Best practice:
 
-For each `tweet_media_usages` record, generate separate fields:
+- Use wide screenshots from real data
+- Prefer one screenshot per core workflow
+- Avoid tiny cropped UI fragments
+- Show the repo doing work, not sitting empty
 
-- `caption_brief`: literal description
-- `scene_description`: what is visually happening
-- `ocr_text`: text visible in the image/video
-- `primary_subjects`
-- `secondary_subjects`
-- `visible_objects`
-- `setting_context`
-- `action_or_event`
-- `conveys`: social or emotional meaning
-- `user_intent`: why the poster likely chose it
-- `rhetorical_role`: reaction image, proof, brag, dunk, illustration, meme template, status signal, etc.
-- `text_media_relationship`: how the text and media reinforce or contrast
-- `metaphor`: implicit pairing between text and image
-- `humor_mechanism`: irony, absurdity, contrast, exaggeration, recognition
-- `emotional_tone`
-- `cultural_reference`
-- `meme_format`
-- `persuasion_strategy`
-- `brand_signals`
-- `trend_signal`
-- `reuse_pattern`
-- `why_it_works`
-- `audience_takeaway`
-- `search_keywords`
-- `confidence_notes`
-- `usage_notes`
+## Stack
 
-Then summarize all usage rows into `media_asset_summary` fields so retrieval can hit both granular and aggregate interpretations.
+- Next.js app router dashboard
+- TypeScript CLI pipeline
+- Local filesystem storage in `data/`
+- Gemini for analysis and topic extraction
+- Optional Chroma for vector search
+- Optional Typefully integration for saving drafts
 
-### 4. Retrieval layer
+## Quick Start
 
-Create embeddings for:
-
-- tweet text
-- usage-level semantic fields
-- asset-level summaries
-- OCR text
-
-In the current code, each usage facet is embedded and indexed as its own Chroma document. That lets you query:
-
-- only `metaphor`
-- only `conveys`
-- only `rhetorical_role`
-- or the whole facet collection
-
-At query time, retrieve both:
-
-- specific usages that match the prompt
-- canonical asset summaries that match the prompt
-
-That gives you both "find the exact tweet usage" and "find a reusable reaction image archetype."
-
-## Files
-
-- [`README.md`](./README.md)
-- [`schema.sql`](./schema.sql)
-- [`src/lib/extract-tweets.ts`](./src/lib/extract-tweets.ts)
-- [`src/cli/crawl-timeline.ts`](./src/cli/crawl-timeline.ts)
-- [`src/server/data.ts`](./src/server/data.ts)
-- [`app/page.tsx`](./app/page.tsx)
-
-## Install
+### 1. Install dependencies
 
 ```bash
 npm install
 ```
 
-## Running the web app
+### 2. Start the app
 
 ```bash
 npm run dev
@@ -159,229 +118,181 @@ npm run dev
 
 Open [http://localhost:4105](http://localhost:4105).
 
-The dashboard currently shows:
+If you only want to look around the UI and existing local data, that is enough.
 
-- media usage cards with poster/image previews
-- raw crawl manifests
-- placeholder analysis fields that will later be populated by your analyzer jobs
-- run controls, daily schedule config, and local run/error logs
-- facet search over the local Chroma index
+## Setup
 
-## Agent-friendly CLI
+Create a `.env` file in the repo root and add only the keys you need for the flows you want to use.
 
-The repo has CLI entrypoints in [`src/cli`](./src/cli), plus an installed top-level binary in [`bin/x-media-analyst.mjs`](./bin/x-media-analyst.mjs).
-
-Install it once for use from any directory:
+### Required for X capture
 
 ```bash
-npm link
-x-media-analyst help
-x-media-analyst repo root
+X_BEARER_TOKEN=your_x_bearer_token
 ```
 
-Examples:
+Optional:
 
 ```bash
-x-media-analyst facet list
-x-media-analyst search tweets --query "mask reveal" --filter with_media --page 2 --limit 50
-x-media-analyst search facets --query "terminal dashboard" --facet scene_description --limit 5
-x-media-analyst search facets --query "reaction image" --format jsonl
-x-media-analyst app dev
-x-media-analyst run stack
+X_USER_ID=your_x_user_id
+APP_BASE_URL=http://localhost:4105
 ```
 
-`x-media-analyst search facets` returns structured output with:
-
-- search scores and retrieval mode
-- usage IDs, tweet IDs, and tweet URLs
-- media asset IDs and media URLs
-- matched facet names, descriptions, and values
-- full saved analysis payloads for each matching usage
-
-`x-media-analyst search tweets` returns:
-
-- paginated captured tweets with `page`, `limit`, `total_results`, and `total_pages`
-- counts for `all`, `with_media`, and `without_media`
-- tweet metadata, media counts, and topic labels for each result
-
-## Run control and scheduling
-
-The dashboard now includes:
-
-- manual trigger buttons for `crawl_x_api`, `crawl_timeline`, `analyze_missing`, and `rebuild_media_assets`
-- persisted run history with status, timestamps, and per-run log files
-- error visibility for failed runs
-- a daily scheduler config that supports one or more local run times when enabled
-
-To activate scheduled execution, run the polling daemon:
+### Required for Gemini-powered analysis
 
 ```bash
+GEMINI_API_KEY=your_gemini_api_key
+```
+
+You can use `GOOGLE_API_KEY` instead.
+
+### Optional for vector search
+
+Run local Chroma:
+
+```bash
+make chroma-up
+```
+
+Default local URL:
+
+```bash
+CHROMA_URL=http://localhost:8000
+```
+
+### Optional for saving drafts to Typefully
+
+```bash
+TYPEFULLY_API_KEY=your_typefully_api_key
+TYPEFULLY_SOCIAL_SET_ID=123456
+```
+
+## Common Commands
+
+```bash
+npm run dev
+npm run check
+npm run lint
+npm test
+npm run test:integration
+npm run test:e2e
+npm run crawl:x-api
+npm run analyze:missing
+npm run analyze:topics -- --limit 100
+npm run media:rebuild
 npm run scheduler
+make up
 ```
 
-That daemon checks the saved schedule every minute and triggers the crawl at any configured local time slot it matches.
+## Typical Workflow
 
-To recompute media fingerprints, asset clusters, and pHash match views across all saved usages:
+### Capture tweets and media
+
+```bash
+npm run crawl:x-api
+```
+
+For a focused single tweet flow, use:
+
+```bash
+npm run capture:x-api-tweet
+```
+
+### Analyze what you captured
+
+```bash
+npm run analyze:missing
+npm run analyze:topics -- --limit 100
+```
+
+### Rebuild media grouping and summaries
 
 ```bash
 npm run media:rebuild
 ```
 
-Next.js dev server only:
+### Search from the CLI
 
 ```bash
-make up-dev
+npm run search:facets -- "reaction image"
+npm run search:tweets -- --query "mask reveal"
 ```
 
-One-command daily polling stack:
+## Why This Can Spread
+
+- It solves a real pain for people who post on X constantly
+- It is local-first, which makes it feel different from generic SaaS dashboards
+- The outputs are visual, searchable, and easy to demo
+- The loop from capture to composition is easy to explain in one sentence
+
+The README, screenshots, and demo clips should sell that loop fast.
+
+## CLI
+
+This repo ships an installable CLI:
+
+```bash
+npm link
+x-media-analyst help
+```
+
+Useful examples:
+
+```bash
+x-media-analyst facet list
+x-media-analyst search facets --query "terminal dashboard" --limit 5
+x-media-analyst search tweets --query "OpenAI" --filter with_media --limit 50
+x-media-analyst app dev
+x-media-analyst run stack
+```
+
+## Data Layout
+
+The current runtime is file-backed. The app reads from local JSON artifacts, not a production database.
+
+- `data/raw/`: crawl outputs and media
+- `data/analysis/tweet-usages/`: per-usage analysis JSON
+- `data/analysis/media-assets/`: asset summaries, duplicate groups, stars
+- `data/analysis/topic-tweets/`: cached topic analyses
+- `data/analysis/topics/`: aggregate topic clusters
+- `data/control/`: scheduler config, run history, logs
+
+## Full Local Stack
+
+If you want the app, scheduler, and Chroma together:
 
 ```bash
 make up
 ```
 
-That is the one-command local stack. It builds the app, starts the production Next.js server, the scheduler loop, and Chroma, and it restarts Next or the scheduler if they exit and restarts Chroma if heartbeat fails.
-Before the stack launches Next, it clears any existing listener on the app port so a stray local process does not trap the supervisor in an `EADDRINUSE` restart loop.
-
-If you only want the scheduler-only path:
+For the app only:
 
 ```bash
-make daily-poll
+make up-dev
 ```
 
-## Running the crawler
+## Status
 
-Primary API-backed crawl:
+What works now:
 
-```bash
-npm run crawl:x-api
-npm run crawl:openclaw
-```
+- X API timeline and single-tweet capture
+- Local artifact storage
+- Media indexing and grouping
+- Gemini-based usage analysis
+- Topic extraction and browsing
+- Local media and tweet search
+- Reply, topic, media, and clone drafting workflows
 
-Fallback Playwright crawl:
+Still local-operator oriented:
 
-```bash
-npm run crawl:timeline
-```
+- You are expected to run services and keep env keys locally
+- The source of truth is the filesystem under `data/`
+- Some features are optional and only light up when the relevant env or local service exists
 
-Optional env:
+## Repo Guide
 
-```bash
-MAX_SCROLLS=50 SCROLL_PAUSE_MS=3000 npm run crawl:timeline
-```
+Start here if you want to understand or extend the codebase:
 
-Notes:
-
-- `crawl:x-api` is the primary command for the main X API capture path
-- `crawl:openclaw` remains as a compatibility alias
-- both crawl paths refresh the page as the first action, then use the shared scroll humanizer so capture timing and scroll direction are less rigid
-- by default both crawl paths auto-run missing analysis and topic refresh after the crawl completes; set `AUTO_ANALYZE_AFTER_CRAWL=0` to disable both, or `AUTO_ANALYZE_TOPICS_AFTER_CRAWL=0` to skip only topic refresh
-- the crawler launches Chromium non-headless so you can validate login state
-- if the Playwright-managed Chromium bundle is missing, the crawler falls back to your locally installed Google Chrome; if neither is available, run `npx playwright install chromium`
-- by default the crawler downloads images and video poster thumbnails, but does not download `video.twimg.com` payloads
-- if X serves media through HLS playlists, the script records the `.m3u8` URL now; later you should add playlist resolution and segment download only for promoted/trending assets
-- you should eventually move login/session handling to a persistent Playwright context
-
-Current media env flags:
-
-```bash
-DOWNLOAD_IMAGES=1
-DOWNLOAD_VIDEO_POSTERS=1
-DOWNLOAD_VIDEOS=0
-```
-
-## Gemini analysis and Chroma search
-
-Required env:
-
-```bash
-export GEMINI_API_KEY=...
-export CHROMA_URL=http://localhost:8000
-```
-
-Optional env:
-
-```bash
-export GEMINI_ANALYSIS_MODEL=gemini-3.1-flash-lite-preview
-export GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-export CHROMA_COLLECTION=twitter_trend_facets
-```
-
-Analyze a single tweet usage and index all facets:
-
-```bash
-npm run analyze:tweet -- 2030602059712471112 0
-```
-
-Search across all indexed facets:
-
-```bash
-npm run search:facets -- "reaction image for panic and surveillance"
-```
-
-Search only one facet:
-
-```bash
-npm run search:facets -- "symbolic pairing with text about truth" metaphor
-```
-
-Analysis files are written to:
-
-```bash
-data/analysis/tweet-usages/
-```
-
-## Tests
-
-Unit tests:
-
-```bash
-npm test
-```
-
-Live integration tests:
-
-```bash
-LIVE_GEMINI_TESTS=1 npm run test:integration
-LIVE_CHROMA_TESTS=1 npm run test:integration
-LIVE_INTEGRATION_TESTS=1 npm run test:integration
-```
-
-Full end-to-end live pipeline test:
-
-```bash
-LIVE_E2E_TESTS=1 npm run test:e2e
-```
-
-Notes:
-
-- live Gemini tests require `GOOGLE_API_KEY`
-- live Chroma tests require a running local Chroma server at `CHROMA_URL`
-- the live e2e test runs ingest, real Gemini analysis on a sample tweet usage, Chroma indexing, and facet search
-
-## Make targets
-
-Recommended top-level commands:
-
-```bash
-make test-all
-make chroma-up
-make test-live-gemini
-make test-live-chroma
-make test-live-integration
-make test-live-e2e
-make live-all
-```
-
-Notes:
-
-- `make test-all` covers the non-live gate: typecheck, build, unit tests
-- `make live-all` starts local Chroma and runs the full live test matrix
-- `make chroma-down` removes the local Chroma container
-
-## Suggested next build steps
-
-1. Add SQLite writes for the schema in [`schema.sql`](./schema.sql).
-2. Add exact and perceptual dedupe before analysis.
-3. Add an analyzer worker that calls external vision/OCR/embedding APIs and writes usage-level fields.
-4. Add an aggregation worker that rolls usage rows into `media_asset_summary`.
-5. Add a retrieval endpoint that searches both usage rows and asset summaries.
+- [`agent_docs/00-start-here.md`](./agent_docs/00-start-here.md)
+- [`agent_docs/10-repo-map.md`](./agent_docs/10-repo-map.md)
+- [`agent_docs/20-runtime-flows.md`](./agent_docs/20-runtime-flows.md)
+- [`agent_docs/40-operations.md`](./agent_docs/40-operations.md)

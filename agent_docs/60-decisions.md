@@ -22,6 +22,14 @@ Only log things that future contributors are likely to need.
 
 ## Current Entries
 
+## 2026-03-19: Repeat hotness should favor strongest repeated hits, not the full weak tail
+
+- Context: media hotness was summing likes across every usage inside a duplicate group, which let long tails of weak repeats outrank smaller sets of clearly strong repeated winners.
+- Decision: keep the explicit duplicate-count bonus and recency decay, but cap the like contribution to the sum of the top five like counts inside each repeat group.
+- Why: the score should answer "does this thing keep hitting?" more than "how many low-signal reposts exist?"
+- Impact: repeated assets still get a direct repeat bonus, but ranking now leans harder toward groups with several genuinely hot examples instead of raw repeat volume alone.
+- Follow-up: if operators still want stronger repeat conviction, test a step-up multiplier at repeat-count thresholds instead of going back to full-group like sums.
+
 ## 2026-03-13: Keep dashboard assembly cached and move deferred capture maintenance into a worker
 
 - Context: page loads and focused tweet lookup could stall the Next.js server because `getDashboardData()` rebuilt the full file-backed read model on every read, and deferred capture post-processing still started heavy maintenance inside the request process.

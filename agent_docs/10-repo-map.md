@@ -7,6 +7,7 @@ This is the directory-level navigation guide.
 - [`app/`](../app): App Router pages and API routes.
 - [`src/`](../src): main TypeScript code.
 - [`data/`](../data): local runtime artifacts and derived files.
+- [`docs/screenshots/`](../docs/screenshots): README screenshot staging area for product and workflow images.
 - [`tests/`](../tests): unit, integration, and e2e tests.
 - [`schema.sql`](../schema.sql): target relational schema, useful for future-state intent.
 - [`README.md`](../README.md): product- and operator-oriented overview.

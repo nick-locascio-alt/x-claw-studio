@@ -20,13 +20,13 @@ describe("computeHotnessScore", () => {
     const nowMs = Date.parse("2026-03-10T12:00:00.000Z");
     const baseline = computeHotnessScore({
       duplicateCount: 1,
-      totalLikes: 10,
+      topLikesSum: 10,
       mostRecentTimestampMs: nowMs,
       nowMs
     });
     const hotter = computeHotnessScore({
       duplicateCount: 4,
-      totalLikes: 500,
+      topLikesSum: 500,
       mostRecentTimestampMs: nowMs,
       nowMs
     });
@@ -38,17 +38,35 @@ describe("computeHotnessScore", () => {
     const nowMs = Date.parse("2026-03-10T12:00:00.000Z");
     const fresh = computeHotnessScore({
       duplicateCount: 3,
-      totalLikes: 120,
+      topLikesSum: 120,
       mostRecentTimestampMs: nowMs - 2 * 60 * 60 * 1000,
       nowMs
     });
     const stale = computeHotnessScore({
       duplicateCount: 3,
-      totalLikes: 120,
+      topLikesSum: 120,
       mostRecentTimestampMs: nowMs - 7 * 24 * 60 * 60 * 1000,
       nowMs
     });
 
     expect(fresh).toBeGreaterThan(stale);
+  });
+
+  it("does not let a long weak tail outweigh a tighter set of strong repeats", () => {
+    const nowMs = Date.parse("2026-03-10T12:00:00.000Z");
+    const strongRepeats = computeHotnessScore({
+      duplicateCount: 5,
+      topLikesSum: 650,
+      mostRecentTimestampMs: nowMs,
+      nowMs
+    });
+    const weakTail = computeHotnessScore({
+      duplicateCount: 20,
+      topLikesSum: 200,
+      mostRecentTimestampMs: nowMs,
+      nowMs
+    });
+
+    expect(strongRepeats).toBeGreaterThan(weakTail);
   });
 });

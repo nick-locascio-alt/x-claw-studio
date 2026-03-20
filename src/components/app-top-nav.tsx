@@ -59,6 +59,8 @@ const NAV_SECTIONS: NavSection[] = [
   }
 ];
 
+const DESKTOP_NAV_ITEMS = NAV_SECTIONS.flatMap((section) => section.items);
+
 function resolveContextLabel(pathname: string): string | null {
   if (pathname.startsWith("/usage/")) {
     return "Media detail";
@@ -120,7 +122,7 @@ export function AppTopNav() {
     <header className="app-top-nav-shell">
       <div className="app-top-nav terminal-window">
         <div className="window-bar">
-          <div className="min-w-0">
+          <div className="min-w-0 shrink-0">
             <Link href="/" className="inline-flex items-center gap-3 text-inherit focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan">
               <span className="section-kicker">Twitter Trend</span>
               <span className="hidden text-sm text-muted sm:inline">
@@ -128,7 +130,26 @@ export function AppTopNav() {
               </span>
             </Link>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="hidden min-w-0 flex-1 items-center justify-end gap-2 md:flex">
+            <nav aria-label="Primary" className="flex flex-wrap justify-end gap-2">
+              {DESKTOP_NAV_ITEMS.map((item) => {
+                const active = item.match(pathname);
+
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    className={active ? "tt-button min-h-9 px-3 py-2" : "tt-link min-h-9 px-3 py-2"}
+                  >
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+            {contextLabel ? <span className="tt-chip">{contextLabel}</span> : null}
+          </div>
+          <div className="flex items-center gap-2 md:hidden">
             {contextLabel ? <span className="hidden tt-chip sm:inline-flex">{contextLabel}</span> : null}
             <button
               type="button"
@@ -145,7 +166,7 @@ export function AppTopNav() {
         <nav
           id="app-primary-nav"
           aria-label="Primary"
-          className={`panel-body pt-4 ${menuOpen ? "block" : "hidden md:block"}`}
+          className={`panel-body pt-4 md:hidden ${menuOpen ? "block" : "hidden"}`}
         >
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-slate-400">Jump directly to any workspace from the header.</div>
