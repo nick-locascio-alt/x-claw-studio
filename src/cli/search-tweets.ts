@@ -21,13 +21,13 @@ interface SearchTweetsCliOptions {
 const HELP_TEXT = `List captured tweets with server-style filtering and pagination.
 
 Usage:
-  x-media-analyst search tweets [--query "<query>"] [--filter all|with_media|without_media] [--sort newest_desc|newest_asc] [--page <n>] [--limit <n>] [--format json|jsonl]
+  x-media-analyst search tweets [--query "<query>"] [--filter all|with_media|without_media] [--sort newest_desc|newest_asc|relative_engagement_desc] [--page <n>] [--limit <n>] [--format json|jsonl]
   x-media-analyst search tweets "<query>"
 
 Flags:
   -q, --query <query>     Filter by author or tweet text.
   --filter <filter>       all, with_media, or without_media. Default: all.
-  --sort <sort>           newest_desc or newest_asc. Default: newest_desc.
+  --sort <sort>           newest_desc, newest_asc, or relative_engagement_desc. Default: newest_desc.
   -p, --page <n>          Page number. Default: 1.
   -l, --limit <n>         Page size. Max: 200. Default: 200.
   --format <format>       Output format: json or jsonl. Default: json.
@@ -41,6 +41,7 @@ Exit codes:
 
 Examples:
   x-media-analyst search tweets --filter with_media --sort newest_asc --limit 50
+  x-media-analyst search tweets --sort relative_engagement_desc --filter all --limit 25
   x-media-analyst search tweets "mask reveal" --page 2 --json
   x-media-analyst search tweets --query "elon" --filter without_media --jsonl`;
 
@@ -66,11 +67,15 @@ function parseFilter(value: string | undefined): CapturedTweetFilter {
 }
 
 function parseSort(value: string | undefined): CapturedTweetSort {
-  if (!value || value === "newest_desc" || value === "newest_asc" || value === "newest") {
+  if (!value || value === "newest_desc" || value === "newest_asc" || value === "relative_engagement_desc" || value === "relative_engagement" || value === "newest") {
+    if (value === "relative_engagement_desc" || value === "relative_engagement") {
+      return "relative_engagement_desc";
+    }
+
     return value === "newest_asc" ? "newest_asc" : "newest_desc";
   }
 
-  throw new Error(`Invalid --sort value "${value}". Expected newest_desc or newest_asc.`);
+  throw new Error(`Invalid --sort value "${value}". Expected newest_desc, newest_asc, or relative_engagement_desc.`);
 }
 
 export function parseSearchTweetsCliArgs(argv: string[]): SearchTweetsCliOptions {
@@ -133,6 +138,7 @@ export function buildAgentTweetSearchPayload(result: CapturedTweetPage) {
       author_handle: entry.tweet.authorHandle,
       author_username: entry.tweet.authorUsername,
       author_display_name: entry.tweet.authorDisplayName,
+      author_follower_count: entry.tweet.authorFollowerCount ?? null,
       created_at: entry.tweet.createdAt,
       extracted_at: entry.tweet.extraction.extractedAt,
       text: entry.tweet.text,
@@ -143,7 +149,9 @@ export function buildAgentTweetSearchPayload(result: CapturedTweetPage) {
       first_media_asset_starred: entry.firstMediaAssetStarred,
       topic_labels: entry.topicLabels,
       top_topic_label: entry.topTopicLabel,
-      top_topic_hotness_score: entry.topTopicHotnessScore
+      top_topic_hotness_score: entry.topTopicHotnessScore,
+      relative_engagement_score: entry.relativeEngagementScore,
+      relative_engagement_band: entry.relativeEngagementBand
     }))
   };
 }

@@ -47,7 +47,7 @@ export function computeRelativeEngagementScore(input: {
   nowMs?: number;
 }): number | null {
   const followerCount = input.tweet.authorFollowerCount;
-  if (!Number.isFinite(followerCount) || followerCount === null || followerCount <= 0) {
+  if (followerCount == null || !Number.isFinite(followerCount) || followerCount <= 0) {
     return null;
   }
 

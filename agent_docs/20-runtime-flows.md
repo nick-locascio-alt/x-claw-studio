@@ -77,6 +77,7 @@ Important detail:
 - This function synthesizes pending analyses for usages that exist in manifests but do not yet have saved analysis JSON.
 - The server now keeps an in-process snapshot cache keyed off cheap file and directory mtimes, so repeated page loads and helper lookups can reuse the assembled dashboard state until the backing files change.
 - It also enriches each usage with asset-level metadata used by the UI, including duplicate-group counts, similar-match counts, and a time-decayed hotness score derived from duplicate frequency plus likes.
+- It also enriches each captured tweet with a relative-engagement score and band when follower counts are available, so downstream ranking can compare overperformance instead of raw likes alone.
 - It now also marks each media usage and captured tweet as `indexed`, `stale`, or `missing` relative to the current asset index generation timestamp, so the UI can show when asset grouping has not caught up with the latest crawl state.
 - It reads the cached `data/analysis/topics/index.json` topic index and exposes both per-tweet topic labels and aggregate topic clusters when that cache exists.
 - When a media asset has a completed promoted-video analysis, the dashboard prefers that video-derived analysis over older poster/image usage analysis for display.

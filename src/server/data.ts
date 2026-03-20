@@ -820,6 +820,9 @@ function normalizeCapturedTweetSort(value: string | null | undefined): CapturedT
   switch (value) {
     case "newest_asc":
       return "newest_asc";
+    case "relative_engagement_desc":
+    case "relative_engagement":
+      return "relative_engagement_desc";
     case "newest":
       return "newest_desc";
     default:
@@ -874,11 +877,18 @@ export function getCapturedTweetPage(input: {
   const pageSize = Math.min(MAX_CAPTURED_TWEET_PAGE_SIZE, Math.max(1, Math.floor(input.pageSize ?? CAPTURED_TWEET_PAGE_SIZE)));
   const queryMatches = input.tweets
     .filter((entry) => matchesCapturedTweetQuery(entry, normalizedQueryLower))
-    .sort((left, right) =>
-      sort === "newest_asc"
+    .sort((left, right) => {
+      if (sort === "relative_engagement_desc") {
+        return (
+          (right.relativeEngagementScore ?? -1) - (left.relativeEngagementScore ?? -1) ||
+          getCapturedTweetTimestampMs(right) - getCapturedTweetTimestampMs(left)
+        );
+      }
+
+      return sort === "newest_asc"
         ? getCapturedTweetTimestampMs(left) - getCapturedTweetTimestampMs(right)
-        : getCapturedTweetTimestampMs(right) - getCapturedTweetTimestampMs(left)
-    );
+        : getCapturedTweetTimestampMs(right) - getCapturedTweetTimestampMs(left);
+    });
   const counts = {
     with_media: queryMatches.filter((entry) => entry.hasMedia).length,
     without_media: queryMatches.filter((entry) => !entry.hasMedia).length,

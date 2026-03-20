@@ -197,7 +197,7 @@ export interface CapturedTweetRecord {
 }
 
 export type CapturedTweetFilter = "with_media" | "without_media" | "all";
-export type CapturedTweetSort = "newest_desc" | "newest_asc";
+export type CapturedTweetSort = "newest_desc" | "newest_asc" | "relative_engagement_desc";
 
 export interface CapturedTweetPage {
   tweets: CapturedTweetRecord[];

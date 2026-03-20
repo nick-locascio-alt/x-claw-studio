@@ -464,24 +464,28 @@ describe("getCapturedTweetPage", () => {
         tweet: createTweet({
           tweetId: "1",
           createdAt: "2026-03-08T12:00:00.000Z"
-        })
+        }),
+        relativeEngagementScore: 1.2
       }),
       createCapturedTweetRecord({
         tweet: createTweet({
           tweetId: "2",
           createdAt: "2026-03-09T12:00:00.000Z"
-        })
+        }),
+        relativeEngagementScore: 5.8
       }),
       createCapturedTweetRecord({
         tweet: createTweet({
           tweetId: "3",
           createdAt: "2026-03-10T12:00:00.000Z"
-        })
+        }),
+        relativeEngagementScore: 3.4
       })
     ];
 
     expect(getCapturedTweetPage({ tweets, sort: "newest_desc" }).tweets.map((entry) => entry.tweet.tweetId)).toEqual(["3", "2", "1"]);
     expect(getCapturedTweetPage({ tweets, sort: "newest_asc" }).tweets.map((entry) => entry.tweet.tweetId)).toEqual(["1", "2", "3"]);
+    expect(getCapturedTweetPage({ tweets, sort: "relative_engagement_desc" }).tweets.map((entry) => entry.tweet.tweetId)).toEqual(["2", "3", "1"]);
     expect(getCapturedTweetPage({ tweets, sort: "newest" }).sort).toBe("newest_desc");
   });
 });

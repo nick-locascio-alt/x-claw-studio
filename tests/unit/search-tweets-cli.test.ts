@@ -5,11 +5,11 @@ import { buildAgentTweetSearchPayload, parseSearchTweetsCliArgs } from "@/src/cl
 describe("parseSearchTweetsCliArgs", () => {
   it("accepts flag-based arguments", () => {
     expect(
-      parseSearchTweetsCliArgs(["--query", "mask reveal", "--filter", "with_media", "--sort", "newest_asc", "--page", "2", "--limit", "50", "--jsonl"])
+      parseSearchTweetsCliArgs(["--query", "mask reveal", "--filter", "with_media", "--sort", "relative_engagement_desc", "--page", "2", "--limit", "50", "--jsonl"])
     ).toMatchObject({
       query: "mask reveal",
       filter: "with_media",
-      sort: "newest_asc",
+      sort: "relative_engagement_desc",
       page: 2,
       limit: 50,
       format: "jsonl"
@@ -66,8 +66,8 @@ describe("buildAgentTweetSearchPayload", () => {
           topicLabels: ["Mask Reveal"],
           topTopicLabel: "Mask Reveal",
           topTopicHotnessScore: 5.2,
-          relativeEngagementScore: null,
-          relativeEngagementBand: null
+          relativeEngagementScore: 4.6,
+          relativeEngagementBand: "strong"
         }
       ],
       page: 2,
@@ -103,7 +103,9 @@ describe("buildAgentTweetSearchPayload", () => {
       tweet_id: "tweet-1",
       author_username: "example",
       has_media: false,
-      topic_labels: ["Mask Reveal"]
+      topic_labels: ["Mask Reveal"],
+      relative_engagement_score: 4.6,
+      relative_engagement_band: "strong"
     });
   });
 });

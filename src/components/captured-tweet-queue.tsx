@@ -12,7 +12,8 @@ import { getPreferredXStatusUrl } from "@/src/lib/x-status-url";
 
 const SORT_LABELS: Record<CapturedTweetSort, string> = {
   newest_desc: "Newest first",
-  newest_asc: "Oldest first"
+  newest_asc: "Oldest first",
+  relative_engagement_desc: "Relative engagement"
 };
 
 const ReplyComposer = dynamic(
@@ -160,9 +161,12 @@ export function CapturedTweetQueue(props: {
         return haystack.includes(normalizedQuery);
       })
       .sort((left, right) =>
-        sort === "newest_asc"
-          ? getTweetTimestampMs(left.tweet) - getTweetTimestampMs(right.tweet)
-          : getTweetTimestampMs(right.tweet) - getTweetTimestampMs(left.tweet)
+        sort === "relative_engagement_desc"
+          ? (right.relativeEngagementScore ?? -1) - (left.relativeEngagementScore ?? -1) ||
+            getTweetTimestampMs(right.tweet) - getTweetTimestampMs(left.tweet)
+          : sort === "newest_asc"
+            ? getTweetTimestampMs(left.tweet) - getTweetTimestampMs(right.tweet)
+            : getTweetTimestampMs(right.tweet) - getTweetTimestampMs(left.tweet)
       );
   }, [deferredQuery, isPaginated, props.tweets, sort, tweetFilter]);
 
@@ -357,6 +361,16 @@ export function CapturedTweetQueue(props: {
                     {(entry.staleMediaCount ?? 0) > 0 ? <span className="tt-chip tt-chip-accent">stale {entry.staleMediaCount}</span> : null}
                     {(entry.missingMediaCount ?? 0) > 0 ? <span className="tt-chip tt-chip-accent">missing {entry.missingMediaCount}</span> : null}
                     {entry.firstMediaAssetId && entry.firstMediaAssetStarred ? <span className="tt-chip tt-chip-accent">starred</span> : null}
+                    {entry.relativeEngagementScore !== null ? (
+                      <span className={`tt-chip ${entry.relativeEngagementBand === "breakout" ? "tt-chip-accent" : ""}`}>
+                        rel {entry.relativeEngagementScore.toFixed(2)}
+                      </span>
+                    ) : null}
+                    {entry.relativeEngagementBand ? (
+                      <span className={`tt-chip ${entry.relativeEngagementBand === "breakout" ? "tt-chip-accent" : ""}`}>
+                        {entry.relativeEngagementBand}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
 

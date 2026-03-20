@@ -44,7 +44,7 @@ function renderField(value: string | null): string {
   return value ?? "Not analyzed yet";
 }
 
-function formatMediaAssetSyncStatus(status: string): string {
+function formatMediaAssetSyncStatus(status: string | undefined): string {
   if (status === "missing") {
     return "Missing";
   }

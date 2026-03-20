@@ -262,6 +262,6 @@ When changing shape, check these in order:
 - The dashboard merges saved analyses with synthetic pending rows.
 - Composer request and draft payloads are not length-capped by the local Zod contracts. If a downstream target like X or Typefully rejects oversized text, that happens after local composition rather than during request parsing.
 - The dashboard read model enriches each `TweetUsageRecord` with duplicate-group metadata, asset sync status (`indexed`, `stale`, or `missing`), and a computed hotness score; those values are derived at read time and are not persisted as separate JSON files.
-- `CapturedTweetRecord` also carries derived asset-sync counts so the tweet browser can flag posts whose media have not been folded into the asset index yet.
+- `CapturedTweetRecord` also carries derived asset-sync counts plus a read-time relative-engagement score/band when follower counts are present, so the tweet browser and trend brief can spot overperformers without mutating stored crawl manifests.
 - The dashboard does not rebuild topic analyses on read. Topic caches are produced by the explicit `analyze:topics` flow.
 - Asset summaries may be fallback summaries when only one complete usage analysis exists.
